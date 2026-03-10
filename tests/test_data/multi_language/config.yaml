@@ -1,0 +1,20 @@
+environment: production
+
+services:
+  api:
+    port: 8080
+    workers: 4
+  worker:
+    queue: priority
+
+database:
+  host: localhost
+  replicas:
+    - name: primary
+      region: us-east-1
+    - name: backup
+      region: us-west-2
+
+features:
+  semantic_search: true
+  incremental_indexing: true

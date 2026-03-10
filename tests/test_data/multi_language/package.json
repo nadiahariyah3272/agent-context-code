@@ -1,0 +1,15 @@
+{
+  "name": "claude-context-local",
+  "private": true,
+  "scripts": {
+    "test": "python tests/run_tests.py",
+    "lint": "python -m pytest tests/unit/test_multi_language.py -q"
+  },
+  "dependencies": {
+    "fastmcp": "^2.12.2",
+    "tree-sitter": "^0.25.2"
+  },
+  "workspaces": [
+    "packages/*"
+  ]
+}

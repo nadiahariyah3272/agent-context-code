@@ -1,0 +1,87 @@
+# CLAUDE.md
+
+Claude Code working guide for this repository.
+
+## Project Identity
+
+- Product direction: **AGENT Context Local**
+- Compatibility names in code/paths: `claude-context-local`
+- Canonical repo: `tlines2016/claude-context-local`
+
+## What This Repo Does
+
+Local semantic code search via MCP:
+
+- Multi-language chunking (`chunking/`)
+- Local embedding generation (`embeddings/`)
+- LanceDB-backed indexing and retrieval (`search/`)
+- MCP tool surface for Claude Code (`mcp_server/`)
+
+## Setup Commands
+
+```bash
+uv sync
+python scripts/cli.py doctor
+python scripts/cli.py setup-guide
+```
+
+Remote install commands are documented in `README.md`.
+
+## Claude MCP Registration
+
+macOS/Linux:
+
+```bash
+claude mcp add code-search --scope user -- uv run --directory ~/.local/share/claude-context-local python mcp_server/server.py
+```
+
+PowerShell:
+
+```powershell
+claude mcp add code-search --scope user -- uv run --directory "$env:LOCALAPPDATA\claude-context-local" python mcp_server/server.py
+```
+
+## Key Paths and Components
+
+- `search/indexer.py`: LanceDB index manager
+- `search/searcher.py`: retrieval and ranking
+- `search/incremental_indexer.py`: Merkle-driven incremental flow
+- `mcp_server/code_search_server.py`: indexing/search business logic
+- `scripts/install.sh`, `scripts/install.ps1`: installer/update workflows
+- `scripts/download_model_standalone.py`: model bootstrap
+- `common_utils.py`: storage/config helpers
+
+## Storage Model
+
+All user data stays under `~/.claude_code_search` (or `CODE_SEARCH_STORAGE`):
+
+- `models/` for local model cache
+- `install_config.json` for persisted model choice
+- `projects/{project}_{hash}/` for per-project index and snapshots
+
+Never move index database files into the target workspace.
+
+## Model Notes
+
+- Default model: `Qwen/Qwen3-Embedding-0.6B`
+- Optional models live in `embeddings/model_catalog.py`
+- Install-time selection: `CODE_SEARCH_MODEL`
+- Persisted selection: `install_config.json`
+
+If model download fails during install, the software install may still succeed.
+Treat setup as incomplete until the model is available.
+
+## Test Commands
+
+```bash
+uv run python tests/run_tests.py
+uv run python -m pytest tests/unit/test_cli.py -v
+uv run python -m pytest tests/test_lancedb_schema.py -v
+```
+
+## Contributor Guidance for Claude
+
+- Keep docs and installer messaging aligned with actual behavior.
+- Prefer compatibility-preserving changes over path/command renames.
+- When modifying setup flow, update `README.md`, installers, and
+  `scripts/cli.py` together.
