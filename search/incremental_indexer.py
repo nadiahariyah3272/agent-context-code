@@ -1,8 +1,21 @@
-"""Incremental indexing using Merkle tree change detection."""
+"""Incremental indexing using Merkle tree change detection.
+
+Supports a dual-mode pipeline:
+
+- **coding** mode — AST-aware chunking via tree-sitter, relational graph
+  population (``CodeGraph``), and LanceDB vector embeddings.
+- **writing** mode — Merkle DAG change tracking with text-oriented chunking
+  and vector embeddings (no graph).
+
+Files are routed through the correct pipeline by ``ModeRouter`` based on
+the workspace configuration.  When no ``ModeRouter`` is provided, all
+files fall through to the existing single-mode pipeline for backward
+compatibility.
+"""
 
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -28,10 +41,13 @@ class IncrementalIndexResult:
     time_taken: float
     success: bool
     error: Optional[str] = None
+    # Dual-mode routing stats (populated when ModeRouter is active).
+    routing_stats: Dict = field(default_factory=dict)
+    graph_stats: Dict = field(default_factory=dict)
     
     def to_dict(self) -> Dict:
         """Convert to dictionary."""
-        return {
+        result = {
             'files_added': self.files_added,
             'files_removed': self.files_removed,
             'files_modified': self.files_modified,
@@ -39,19 +55,33 @@ class IncrementalIndexResult:
             'chunks_removed': self.chunks_removed,
             'time_taken': self.time_taken,
             'success': self.success,
-            'error': self.error
+            'error': self.error,
         }
+        if self.routing_stats:
+            result['routing_stats'] = self.routing_stats
+        if self.graph_stats:
+            result['graph_stats'] = self.graph_stats
+        return result
 
 
 class IncrementalIndexer:
-    """Handles incremental indexing of code changes."""
+    """Handles incremental indexing of code changes.
+    
+    Supports an optional ``ModeRouter`` for dual-mode processing.  When a
+    mode router is provided, files are classified as *coding* or *writing*
+    and processed through the appropriate pipeline.  When no router is
+    provided the behaviour is identical to the original single-mode pipeline
+    (backward compatible).
+    """
     
     def __init__(
         self,
         indexer: Optional[Indexer] = None,
         embedder: Optional[CodeEmbedder] = None,
         chunker: Optional[MultiLanguageChunker] = None,
-        snapshot_manager: Optional[SnapshotManager] = None
+        snapshot_manager: Optional[SnapshotManager] = None,
+        mode_router=None,
+        code_graph=None,
     ):
         """Initialize incremental indexer.
         
@@ -60,12 +90,20 @@ class IncrementalIndexer:
             embedder: Embedder instance
             chunker: Code chunker instance
             snapshot_manager: Snapshot manager instance
+            mode_router: Optional ModeRouter for dual-mode processing.
+                         When provided, files are routed to coding or
+                         writing pipelines based on workspace config.
+            code_graph: Optional CodeGraph instance for relationship
+                        tracking in coding mode.
         """
         self.indexer = indexer or Indexer()
         self.embedder = embedder or CodeEmbedder()
         self.chunker = chunker or MultiLanguageChunker()
         self.snapshot_manager = snapshot_manager or SnapshotManager()
         self.change_detector = ChangeDetector(self.snapshot_manager)
+        # Dual-mode support (optional — None preserves legacy behaviour).
+        self.mode_router = mode_router
+        self.code_graph = code_graph
     
     def detect_changes(self, project_path: str) -> Tuple[FileChanges, MerkleDAG]:
         """Detect changes in project since last snapshot.
@@ -192,10 +230,15 @@ class IncrementalIndexer:
     ) -> IncrementalIndexResult:
         """Perform full indexing of a project.
         
+        When a ``mode_router`` is available, files are routed through the
+        dual-mode pipeline (coding vs writing).  Otherwise the legacy
+        single-pipeline path is used.
+        
         Args:
             project_path: Path to project
             project_name: Project name
             start_time: Start time for timing
+            indexing_config: Optional indexing configuration for cache invalidation
             
         Returns:
             IncrementalIndexResult
@@ -205,6 +248,10 @@ class IncrementalIndexer:
             self.indexer.clear_index()
             self.indexer.set_indexing_config(indexing_config)
             
+            # Clear the graph if present (full re-index).
+            if self.code_graph is not None:
+                self.code_graph.clear()
+            
             # Build DAG for all files
             dag = MerkleDAG(project_path)
             dag.build()
@@ -213,16 +260,30 @@ class IncrementalIndexer:
             # Filter supported files
             supported_files = [f for f in all_files if self.chunker.is_supported(f)]
             
-            # Collect all chunks first, then embed in a single pass for efficiency
+            # ── Chunk files ──────────────────────────────────────────────
+            # If a mode router is active, use it to route each file through
+            # the correct pipeline (coding → AST+graph, writing → text).
+            # Otherwise fall back to the original direct-chunker path.
             all_chunks = []
-            for file_path in supported_files:
-                full_path = Path(project_path) / file_path
-                try:
-                    chunks = self.chunker.chunk_file(str(full_path))
-                    if chunks:
-                        all_chunks.extend(chunks)
-                except Exception as e:
-                    logger.warning(f"Failed to chunk {file_path}: {e}")
+            if self.mode_router is not None:
+                self.mode_router.reset_stats()
+                for file_path in supported_files:
+                    full_path = str(Path(project_path) / file_path)
+                    try:
+                        chunks = self.mode_router.route_file(full_path)
+                        if chunks:
+                            all_chunks.extend(chunks)
+                    except Exception as e:
+                        logger.warning(f"Failed to chunk {file_path}: {e}")
+            else:
+                for file_path in supported_files:
+                    full_path = Path(project_path) / file_path
+                    try:
+                        chunks = self.chunker.chunk_file(str(full_path))
+                        if chunks:
+                            all_chunks.extend(chunks)
+                    except Exception as e:
+                        logger.warning(f"Failed to chunk {file_path}: {e}")
 
             # Embed all chunks in one batched call
             all_embedding_results = []
@@ -241,6 +302,15 @@ class IncrementalIndexer:
                 self.indexer.add_embeddings(all_embedding_results)
             
             chunks_added = len(all_embedding_results)
+
+            # Resolve cross-file edges in the graph after all files are
+            # indexed (inheritance across files, etc.).
+            if self.code_graph is not None:
+                try:
+                    cross_edges = self.code_graph.resolve_cross_file_edges()
+                    logger.info("Resolved %d cross-file graph edges", cross_edges)
+                except Exception as e:
+                    logger.warning("Cross-file graph resolution failed: %s", e)
             
             # Save snapshot
             self.snapshot_manager.save_snapshot(dag, {
@@ -258,6 +328,18 @@ class IncrementalIndexer:
             # Compact fragments and clean up old versions.
             self.indexer.optimize()
 
+            # Collect routing and graph stats for the result.
+            routing_stats = (
+                self.mode_router.get_routing_stats()
+                if self.mode_router is not None
+                else {}
+            )
+            graph_stats = (
+                self.code_graph.get_stats()
+                if self.code_graph is not None
+                else {}
+            )
+
             return IncrementalIndexResult(
                 files_added=len(supported_files),
                 files_removed=0,
@@ -265,7 +347,9 @@ class IncrementalIndexer:
                 chunks_added=chunks_added,
                 chunks_removed=0,
                 time_taken=time.time() - start_time,
-                success=True
+                success=True,
+                routing_stats=routing_stats,
+                graph_stats=graph_stats,
             )
             
         except Exception as e:
@@ -284,6 +368,8 @@ class IncrementalIndexer:
     def _remove_old_chunks(self, changes: FileChanges, project_name: str) -> int:
         """Remove chunks for deleted and modified files.
         
+        Also removes symbols/edges from the code graph when present.
+        
         Args:
             changes: File changes
             project_name: Project name
@@ -295,10 +381,17 @@ class IncrementalIndexer:
         chunks_removed = 0
         
         for file_path in files_to_remove:
-            # Remove from metadata
+            # Remove from vector index.
             removed = self.indexer.remove_file_chunks(file_path, project_name)
             chunks_removed += removed
             logger.debug(f"Removed {removed} chunks from {file_path}")
+
+            # Remove from relational graph when available.
+            if self.code_graph is not None:
+                try:
+                    self.code_graph.remove_file(file_path)
+                except Exception as exc:
+                    logger.warning("Graph removal failed for %s: %s", file_path, exc)
         
         return chunks_removed
     
@@ -309,6 +402,9 @@ class IncrementalIndexer:
         project_name: str
     ) -> int:
         """Add chunks for new and modified files.
+        
+        Uses the ``mode_router`` when available to route files through the
+        dual-mode pipeline; otherwise falls back to direct chunking.
         
         Args:
             changes: File changes
@@ -323,12 +419,15 @@ class IncrementalIndexer:
         # Filter supported files
         supported_files = [f for f in files_to_index if self.chunker.is_supported(f)]
         
-        # Collect all chunks first, then embed in a single pass
+        # Collect all chunks, routing through the correct pipeline.
         chunks_to_embed = []
         for file_path in supported_files:
-            full_path = Path(project_path) / file_path
+            full_path = str(Path(project_path) / file_path)
             try:
-                chunks = self.chunker.chunk_file(str(full_path))
+                if self.mode_router is not None:
+                    chunks = self.mode_router.route_file(full_path)
+                else:
+                    chunks = self.chunker.chunk_file(full_path)
                 if chunks:
                     chunks_to_embed.extend(chunks)
             except Exception as e:
