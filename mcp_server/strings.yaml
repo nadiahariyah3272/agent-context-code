@@ -28,7 +28,12 @@ tools:
 
   index_test_project: Index built-in sample project to test the search setup.
 
-  clear_index: Clear the search index and metadata for the current active project.
+  clear_index: Clear the search index, relational graph, and metadata for the current active project.
+
+  get_graph_context: |
+    Retrieve structural relationships around a code chunk. Shows callers, callees, parent classes, and other connections from the relational graph built during indexing.
+    Usage: get_graph_context(chunk_id="abc123", max_depth=2)
+    Cross-project: get_graph_context(chunk_id="abc123", project_path="/other/project")
 
 help: |
   # Multi-project code search
@@ -49,5 +54,6 @@ help: |
   1. Index: `index_directory("/path/to/project")`
   2. Search: `search_code("description of code")`
   3. Find similar: `find_similar_code(chunk_id from search_code)`
+  4. Graph context: `get_graph_context(chunk_id)` — see relationships
 
   See tool descriptions for all available options.

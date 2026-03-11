@@ -1,8 +1,15 @@
-"""Incremental indexing using Merkle tree change detection."""
+"""Incremental indexing using Merkle tree change detection.
+
+Integrates a SQLite relational graph (``CodeGraph``) alongside the LanceDB
+vector index.  When a ``code_graph`` is provided, parsed chunks are fed
+into the graph so that structural relationships (class hierarchies,
+function containment, cross-file inheritance) are available for
+graph-enriched search results.
+"""
 
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -28,10 +35,11 @@ class IncrementalIndexResult:
     time_taken: float
     success: bool
     error: Optional[str] = None
+    graph_stats: Dict = field(default_factory=dict)
     
     def to_dict(self) -> Dict:
         """Convert to dictionary."""
-        return {
+        result = {
             'files_added': self.files_added,
             'files_removed': self.files_removed,
             'files_modified': self.files_modified,
@@ -39,19 +47,29 @@ class IncrementalIndexResult:
             'chunks_removed': self.chunks_removed,
             'time_taken': self.time_taken,
             'success': self.success,
-            'error': self.error
+            'error': self.error,
         }
+        if self.graph_stats:
+            result['graph_stats'] = self.graph_stats
+        return result
 
 
 class IncrementalIndexer:
-    """Handles incremental indexing of code changes."""
+    """Handles incremental indexing of code changes.
+    
+    When a ``code_graph`` is provided, parsed chunks are also fed into the
+    SQLite relational graph for structural relationship tracking.  The
+    graph is optional — when *None*, behaviour is identical to the original
+    vector-only pipeline.
+    """
     
     def __init__(
         self,
         indexer: Optional[Indexer] = None,
         embedder: Optional[CodeEmbedder] = None,
         chunker: Optional[MultiLanguageChunker] = None,
-        snapshot_manager: Optional[SnapshotManager] = None
+        snapshot_manager: Optional[SnapshotManager] = None,
+        code_graph=None,
     ):
         """Initialize incremental indexer.
         
@@ -60,12 +78,15 @@ class IncrementalIndexer:
             embedder: Embedder instance
             chunker: Code chunker instance
             snapshot_manager: Snapshot manager instance
+            code_graph: Optional CodeGraph instance for structural
+                        relationship tracking alongside vector embeddings.
         """
         self.indexer = indexer or Indexer()
         self.embedder = embedder or CodeEmbedder()
         self.chunker = chunker or MultiLanguageChunker()
         self.snapshot_manager = snapshot_manager or SnapshotManager()
         self.change_detector = ChangeDetector(self.snapshot_manager)
+        self.code_graph = code_graph
     
     def detect_changes(self, project_path: str) -> Tuple[FileChanges, MerkleDAG]:
         """Detect changes in project since last snapshot.
@@ -139,7 +160,7 @@ class IncrementalIndexer:
             )
             
             # Process changes
-            chunks_removed = self._remove_old_chunks(changes, project_name)
+            chunks_removed = self._remove_old_chunks(changes, project_name, project_path)
             chunks_added = self._add_new_chunks(changes, project_path, project_name)
             
             # Update snapshot
@@ -205,6 +226,10 @@ class IncrementalIndexer:
             self.indexer.clear_index()
             self.indexer.set_indexing_config(indexing_config)
             
+            # Clear the graph if present (full re-index).
+            if self.code_graph is not None:
+                self.code_graph.clear()
+            
             # Build DAG for all files
             dag = MerkleDAG(project_path)
             dag.build()
@@ -216,11 +241,17 @@ class IncrementalIndexer:
             # Collect all chunks first, then embed in a single pass for efficiency
             all_chunks = []
             for file_path in supported_files:
-                full_path = Path(project_path) / file_path
+                full_path = str(Path(project_path) / file_path)
                 try:
-                    chunks = self.chunker.chunk_file(str(full_path))
+                    chunks = self.chunker.chunk_file(full_path)
                     if chunks:
                         all_chunks.extend(chunks)
+                        # Populate the relational graph when available.
+                        if self.code_graph is not None:
+                            try:
+                                self.code_graph.index_file_chunks(full_path, chunks)
+                            except Exception as exc:
+                                logger.warning("Graph indexing failed for %s: %s", file_path, exc)
                 except Exception as e:
                     logger.warning(f"Failed to chunk {file_path}: {e}")
 
@@ -241,6 +272,15 @@ class IncrementalIndexer:
                 self.indexer.add_embeddings(all_embedding_results)
             
             chunks_added = len(all_embedding_results)
+
+            # Resolve cross-file edges in the graph after all files are
+            # indexed (inheritance across files, etc.).
+            if self.code_graph is not None:
+                try:
+                    cross_edges = self.code_graph.resolve_cross_file_edges()
+                    logger.info("Resolved %d cross-file graph edges", cross_edges)
+                except Exception as e:
+                    logger.warning("Cross-file graph resolution failed: %s", e)
             
             # Save snapshot
             self.snapshot_manager.save_snapshot(dag, {
@@ -258,6 +298,12 @@ class IncrementalIndexer:
             # Compact fragments and clean up old versions.
             self.indexer.optimize()
 
+            graph_stats = (
+                self.code_graph.get_stats()
+                if self.code_graph is not None
+                else {}
+            )
+
             return IncrementalIndexResult(
                 files_added=len(supported_files),
                 files_removed=0,
@@ -265,7 +311,8 @@ class IncrementalIndexer:
                 chunks_added=chunks_added,
                 chunks_removed=0,
                 time_taken=time.time() - start_time,
-                success=True
+                success=True,
+                graph_stats=graph_stats,
             )
             
         except Exception as e:
@@ -281,12 +328,21 @@ class IncrementalIndexer:
                 error=str(e)
             )
     
-    def _remove_old_chunks(self, changes: FileChanges, project_name: str) -> int:
+    def _remove_old_chunks(
+        self,
+        changes: FileChanges,
+        project_name: str,
+        project_path: str,
+    ) -> int:
         """Remove chunks for deleted and modified files.
+        
+        Also removes symbols/edges from the code graph when present.
         
         Args:
             changes: File changes
             project_name: Project name
+            project_path: Project root path, used to reconstruct the absolute
+                          path form that was stored during indexing.
             
         Returns:
             Number of chunks removed
@@ -295,10 +351,20 @@ class IncrementalIndexer:
         chunks_removed = 0
         
         for file_path in files_to_remove:
-            # Remove from metadata
+            # Remove from vector index.
             removed = self.indexer.remove_file_chunks(file_path, project_name)
             chunks_removed += removed
             logger.debug(f"Removed {removed} chunks from {file_path}")
+
+            # Remove from relational graph when available.
+            # Construct the same absolute path form used during indexing:
+            # index_file_chunks is called with str(Path(project_path) / file_path).
+            if self.code_graph is not None:
+                graph_file_path = str(Path(project_path) / file_path)
+                try:
+                    self.code_graph.remove_file(graph_file_path)
+                except Exception as exc:
+                    logger.warning("Graph removal failed for %s: %s", graph_file_path, exc)
         
         return chunks_removed
     
@@ -309,6 +375,8 @@ class IncrementalIndexer:
         project_name: str
     ) -> int:
         """Add chunks for new and modified files.
+        
+        Also populates the relational graph when a ``code_graph`` is available.
         
         Args:
             changes: File changes
@@ -326,11 +394,17 @@ class IncrementalIndexer:
         # Collect all chunks first, then embed in a single pass
         chunks_to_embed = []
         for file_path in supported_files:
-            full_path = Path(project_path) / file_path
+            full_path = str(Path(project_path) / file_path)
             try:
-                chunks = self.chunker.chunk_file(str(full_path))
+                chunks = self.chunker.chunk_file(full_path)
                 if chunks:
                     chunks_to_embed.extend(chunks)
+                    # Populate the relational graph when available.
+                    if self.code_graph is not None:
+                        try:
+                            self.code_graph.index_file_chunks(full_path, chunks)
+                        except Exception as exc:
+                            logger.warning("Graph indexing failed for %s: %s", file_path, exc)
             except Exception as e:
                 logger.warning(f"Failed to chunk {file_path}: {e}")
 
