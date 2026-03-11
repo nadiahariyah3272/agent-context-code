@@ -1,4 +1,10 @@
-"""Code Search Server - manages code search state and business logic."""
+"""Code Search Server - manages code search state and business logic.
+
+Integrates a SQLite relational graph (``CodeGraph``) alongside the LanceDB
+vector index.  During indexing, parsed AST chunks are fed into the graph
+so that structural relationships (class hierarchies, containment, cross-file
+inheritance) are available for graph-enriched search results.
+"""
 
 import os
 import sys
@@ -6,7 +12,7 @@ import json
 import asyncio
 import logging
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from datetime import datetime
 from functools import lru_cache
 
@@ -18,13 +24,18 @@ from chunking.multi_language_chunker import MultiLanguageChunker
 from embeddings.embedder import CodeEmbedder
 from search.indexer import CodeIndexManager
 from search.searcher import IntelligentSearcher
+from graph.code_graph import CodeGraph
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
 
 class CodeSearchServer:
-    """Server that manages code search state and implements business logic."""
+    """Server that manages code search state and implements business logic.
+    
+    Integrates a SQLite relational graph alongside the LanceDB vector index
+    for structural code relationship tracking.
+    """
 
     def __init__(self):
         """Initialize the code search server."""
@@ -32,6 +43,7 @@ class CodeSearchServer:
         self._index_manager: Optional[CodeIndexManager] = None
         self._searcher: Optional[IntelligentSearcher] = None
         self._current_project: Optional[str] = None
+        self._code_graph: Optional[CodeGraph] = None
 
     def get_project_storage_dir(self, project_path: str) -> Path:
         """Get or create project-specific storage directory."""
@@ -193,6 +205,19 @@ class CodeSearchServer:
 
         return self._searcher
 
+    def get_code_graph(self, project_path: str) -> CodeGraph:
+        """Get or create the SQLite relational graph for a project.
+
+        The graph database lives alongside the LanceDB index in the
+        project storage directory (``index/code_graph.db``).
+        """
+        project_dir = self.get_project_storage_dir(project_path)
+        graph_path = project_dir / "index" / "code_graph.db"
+        graph_path.parent.mkdir(parents=True, exist_ok=True)
+        if self._code_graph is None or self._current_project != project_path:
+            self._code_graph = CodeGraph(str(graph_path))
+        return self._code_graph
+
     def search_code(
         self,
         query: str,
@@ -244,11 +269,13 @@ class CodeSearchServer:
                 index_manager = self.get_index_manager(self._current_project)
                 embedder = self.embedder()
                 chunker = MultiLanguageChunker(self._current_project)
+                code_graph = self.get_code_graph(self._current_project)
 
                 incremental_indexer = IncrementalIndexer(
                     indexer=index_manager,
                     embedder=embedder,
-                    chunker=chunker
+                    chunker=chunker,
+                    code_graph=code_graph,
                 )
 
                 reindex_result = incremental_indexer.auto_reindex_if_needed(
@@ -286,6 +313,23 @@ class CodeSearchServer:
             logger.info(f"Search returned {len(results)} results")
 
             formatted_results = [self._format_result(r) for r in results]
+
+            # Enrich results with graph relationships when available.
+            if self._code_graph is not None and include_context:
+                for item, result in zip(formatted_results, results):
+                    try:
+                        rels = self._code_graph.get_relationships(result.chunk_id)
+                        if rels:
+                            item['relationships'] = [
+                                {
+                                    'type': r['edge_type'],
+                                    'target': r['target_chunk_id'] if r['source_chunk_id'] == result.chunk_id else r['source_chunk_id'],
+                                    'direction': 'outgoing' if r['source_chunk_id'] == result.chunk_id else 'incoming',
+                                }
+                                for r in rels[:10]  # Cap to keep payload reasonable
+                            ]
+                    except Exception as exc:
+                        logger.debug("Graph enrichment skipped for %s: %s", result.chunk_id, exc)
 
             response = {
                 'query': query,
@@ -408,7 +452,11 @@ class CodeSearchServer:
         file_patterns: List[str] = None,
         incremental: bool = True
     ) -> str:
-        """Implementation of index_directory tool."""
+        """Implementation of index_directory tool.
+        
+        Builds the vector index and populates the relational graph with
+        structural relationships extracted from AST-parsed chunks.
+        """
         try:
             from search.incremental_indexer import IncrementalIndexer
 
@@ -433,11 +481,13 @@ class CodeSearchServer:
             index_manager = self.get_index_manager(str(directory_path))
             embedder = self.embedder()
             chunker = MultiLanguageChunker(str(directory_path))
+            code_graph = self.get_code_graph(str(directory_path))
 
             incremental_indexer = IncrementalIndexer(
                 indexer=index_manager,
                 embedder=embedder,
-                chunker=chunker
+                chunker=chunker,
+                code_graph=code_graph,
             )
 
             result = incremental_indexer.incremental_index(
@@ -461,6 +511,9 @@ class CodeSearchServer:
                 "time_taken": round(result.time_taken, 2),
                 "index_stats": stats
             }
+
+            if result.graph_stats:
+                response["graph_stats"] = result.graph_stats
 
             if result.error:
                 response["error"] = result.error
@@ -519,6 +572,13 @@ class CodeSearchServer:
                 "model_information": model_info,
                 "storage_directory": str(get_storage_dir()),
             }
+
+            # Include graph statistics when a graph exists.
+            if self._code_graph is not None:
+                try:
+                    response["graph_statistics"] = self._code_graph.get_stats()
+                except Exception:
+                    pass
 
             # Include reranker status
             reranker = self.reranker()
@@ -600,6 +660,8 @@ class CodeSearchServer:
             self._current_project = str(project_path)
             self._index_manager = None
             self._searcher = None
+            # Reset graph so it's re-loaded for the new project.
+            self._code_graph = None
 
             info_file = project_dir / "project_info.json"
             project_info = {}
@@ -662,13 +724,23 @@ class CodeSearchServer:
             })
 
     def clear_index(self) -> str:
-        """Implementation of clear_index tool."""
+        """Implementation of clear_index tool.
+        
+        Also clears the relational graph when present.
+        """
         try:
             if self._current_project is None:
                 return json.dumps({"error": "No project is currently active. Use index_directory() to index a project first."})
 
             index_manager = self.get_index_manager()
             index_manager.clear_index()
+
+            # Clear the relational graph alongside the vector index.
+            if self._code_graph is not None:
+                try:
+                    self._code_graph.clear()
+                except Exception as exc:
+                    logger.warning("Failed to clear code graph: %s", exc)
 
             response = {
                 "success": True,
@@ -679,5 +751,51 @@ class CodeSearchServer:
             return json.dumps(response, indent=2)
         except Exception as e:
             error_msg = f"Clear index failed: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            return json.dumps({"error": error_msg})
+
+    def get_graph_context(
+        self,
+        chunk_id: str,
+        max_depth: int = 2,
+        project_path: str = None,
+    ) -> str:
+        """Retrieve structural relationships around a code chunk.
+
+        Returns the connected sub-graph (symbols and edges) within
+        *max_depth* hops of the given *chunk_id*.  Useful for
+        understanding how a search result connects to the rest of the
+        codebase (callers, callees, parent classes, importers, etc.).
+
+        Parameters
+        ----------
+        chunk_id : str
+            The chunk identifier (from a search result).
+        max_depth : int
+            Maximum traversal depth (default 2).
+        project_path : str, optional
+            Target project path.  Uses the active project when omitted.
+        """
+        try:
+            target_path = project_path or self._current_project
+            if target_path is None:
+                return json.dumps({
+                    "error": "No project is active. Index a directory first.",
+                })
+
+            graph = self.get_code_graph(target_path)
+            subgraph = graph.get_connected_subgraph(chunk_id, max_depth=max_depth)
+
+            return json.dumps({
+                "chunk_id": chunk_id,
+                "max_depth": max_depth,
+                "symbols": subgraph["symbols"],
+                "edges": subgraph["edges"],
+                "symbol_count": len(subgraph["symbols"]),
+                "edge_count": len(subgraph["edges"]),
+            }, indent=2)
+
+        except Exception as e:
+            error_msg = f"Graph context lookup failed: {str(e)}"
             logger.error(error_msg, exc_info=True)
             return json.dumps({"error": error_msg})
