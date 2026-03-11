@@ -376,8 +376,13 @@ class CodeSearchServer:
                                 }
                                 for r in rels[:10]  # Cap at 10 to keep payload reasonable
                             ]
-                    except Exception:
-                        pass  # Graph enrichment is best-effort.
+                    except Exception as exc:
+                        # Graph enrichment is best-effort; log at debug
+                        # so developers can trace failures without noise.
+                        logger.debug(
+                            "Graph enrichment skipped for %s: %s",
+                            result.chunk_id, exc,
+                        )
 
             response = {
                 'query': query,
