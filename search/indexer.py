@@ -96,7 +96,7 @@ class CodeIndexManager:
 
     This is the Phase 3 replacement for the FAISS + SQLiteDict backend.
     All data is stored in a single LanceDB table under the centralised
-    storage directory (``~/.claude_code_search/``), never inside the
+    storage directory (``~/.agent_code_search/``), never inside the
     user's project workspace.
 
     Public API

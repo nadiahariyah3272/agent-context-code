@@ -231,7 +231,7 @@ def cmd_help() -> None:
     install_dir = get_default_install_dir()
 
     print(bold("AGENT Context Local (compat: Claude Context Local)") + f"  v{VERSION}")
-    print("Local semantic code search for Claude Code via MCP.\n")
+    print("Local semantic code search for AI coding assistants via MCP.\n")
 
     print(bold("USAGE"))
     print(f"  python scripts/cli.py {cyan('<command>')}\n")
@@ -464,7 +464,7 @@ def cmd_doctor() -> None:
 def cmd_status() -> None:
     """Show per-project index statistics from the storage directory.
 
-    Iterates ``~/.claude_code_search/projects/`` and prints each project's
+    Iterates ``~/.agent_code_search/projects/`` and prints each project's
     name, workspace path, chunk count, and file count from its ``stats.json``.
     """
     print(bold("Index Status\n"))
@@ -476,7 +476,7 @@ def cmd_status() -> None:
 
     if not projects_dir.is_dir():
         print("  No projects indexed yet.")
-        print(f"  Use Claude Code to say: {cyan('index this codebase')}")
+        print(f"  Use your AI coding assistant to say: {cyan('index this codebase')}")
         return
 
     project_count = 0
@@ -583,7 +583,7 @@ def cmd_setup_guide() -> None:
 
     # Step 3 – Register MCP
     print(bold("3. Register the MCP server"))
-    print(f"   {yellow('Run this in your terminal, not inside a Claude Code session.')}\n")
+    print(f"   {yellow('Run this in your terminal, not inside your MCP client session.')}\n")
     if is_windows():
         print(f"   {cyan(f'claude mcp add code-search --scope user -- uv run --directory \"{install_dir}\" python mcp_server/server.py')}\n")
     else:
@@ -612,7 +612,7 @@ def cmd_setup_guide() -> None:
 
     # Step 5 – Use
     print(bold("5. Index & search"))
-    print(f"   Open Claude Code in your project directory and say:")
+    print(f"   Open your AI coding assistant in your project directory and say:")
     print(f"   {cyan('index this codebase')}\n")
     print(f"   Then search with:")
     print(f"   {cyan('search for authentication logic')}\n")

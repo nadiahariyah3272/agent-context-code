@@ -44,7 +44,7 @@ def download_model(model_name: str = "google/embeddinggemma-300m", storage_dir: 
     failure (with an actionable HuggingFace auth error printed to stdout).
     """
     if storage_dir is None:
-        storage_dir = os.path.expanduser("~/.claude_code_search")
+        storage_dir = os.path.expanduser("~/.agent_code_search")
     
     # Create storage directory
     storage_path = Path(storage_dir)
@@ -92,7 +92,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--storage-dir",
-        help="Storage directory (default: ~/.claude_code_search)"
+        help="Storage directory (default: ~/.agent_code_search)"
     )
     parser.add_argument(
         "--verbose", "-v",

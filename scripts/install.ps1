@@ -1,7 +1,7 @@
 param(
     [string]$RepoUrl = "https://github.com/tlines2016/agent-context-code",
     [string]$ProjectDir = "$env:LOCALAPPDATA\agent-context-code",
-    [string]$StorageDir = $(if ($env:CODE_SEARCH_STORAGE) { $env:CODE_SEARCH_STORAGE } else { "$env:USERPROFILE\.claude_code_search" }),
+    [string]$StorageDir = $(if ($env:CODE_SEARCH_STORAGE) { $env:CODE_SEARCH_STORAGE } else { "$env:USERPROFILE\.agent_code_search" }),
     [string]$ModelName = $(if ($env:CODE_SEARCH_MODEL) { $env:CODE_SEARCH_MODEL } else { "Qwen/Qwen3-Embedding-0.6B" })
 )
 

@@ -17,10 +17,10 @@ class SnapshotManager:
         """Initialize snapshot manager.
         
         Args:
-            storage_dir: Directory to store snapshots (default: ~/.claude_code_search/merkle)
+            storage_dir: Directory to store snapshots (default: ~/.agent_code_search/merkle)
         """
         if storage_dir is None:
-            storage_dir = Path.home() / '.claude_code_search' / 'merkle'
+            storage_dir = Path.home() / '.agent_code_search' / 'merkle'
         self.storage_dir = Path(storage_dir)
         self.storage_dir.mkdir(parents=True, exist_ok=True)
         

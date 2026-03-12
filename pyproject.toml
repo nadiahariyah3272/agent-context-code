@@ -3,27 +3,34 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "agent-context-code"
-version = "0.1.0"
+name = "agent-context-local"
+version = "1.0.0"
 # Vector backend: LanceDB (embedded, serverless). Default model: Qwen/Qwen3-Embedding-0.6B.
-description = "Local semantic code search for Claude Code (MCP) using LanceDB, Unsloth Qwen3-Embedding, and AST/tree-sitter chunking. 100% local embeddings and indexing."
+description = "Local semantic code search for AI coding assistants via MCP - LanceDB, Qwen3-Embedding, and AST/tree-sitter chunking. 100% local embeddings and indexing."
 readme = "README.md"
 requires-python = ">=3.12"
 authors = [
-    { name = "Farhan Ali Raza" }
+    { name = "tlines2016" }
 ]
 maintainers = [
-    { name = "Farhan Ali Raza" }
+    { name = "tlines2016" }
 ]
 keywords = [
     "semantic-search",
     "code-search",
     "embeddings",
+    "code-indexing",
+    "code-index",
     "lancedb",
     "mcp",
+    "local",
+    "ai-agent",
+    "mcp-tool",
     "claude",
     "tree-sitter",
     "chunking",
+    "indexing",
+    "indexer",
     "python",
 ]
 dependencies = [

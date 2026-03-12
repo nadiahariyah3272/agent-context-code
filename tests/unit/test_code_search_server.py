@@ -358,12 +358,16 @@ class TestGetGraphContext:
     def test_get_graph_context_response_counts_match_payload(self, server):
         server._current_project = "/some/project"
         mock_graph = MagicMock()
+        mock_graph.get_symbol.return_value = {"chunk_id": "a", "name": "A"}
         mock_graph.get_connected_subgraph.return_value = {
             "symbols": [{"chunk_id": "a"}, {"chunk_id": "b"}],
             "edges": [{"source_chunk_id": "a", "target_chunk_id": "b", "edge_type": "contains"}],
         }
-        with patch.object(server, "get_code_graph", return_value=mock_graph):
+        with patch.object(server, "get_code_graph", return_value=mock_graph), \
+             patch.object(server, "_graph_db_path") as mock_gpath:
+            mock_gpath.return_value = MagicMock(exists=MagicMock(return_value=True))
             result = json.loads(server.get_graph_context("a", max_depth=2))
+        assert result["found"] is True
         assert result["symbol_count"] == len(result["symbols"])
         assert result["edge_count"] == len(result["edges"])
 
@@ -377,12 +381,14 @@ class TestGetGraphContext:
 
         target_project = str(tmp_path / "other_project")
         mock_graph = MagicMock()
+        mock_graph.get_symbol.return_value = {"chunk_id": "chunk_1", "name": "Foo"}
         mock_graph.get_connected_subgraph.return_value = {"symbols": [], "edges": []}
 
         with patch.object(server, "_open_transient_graph", return_value=mock_graph) as open_graph:
             result = json.loads(server.get_graph_context("chunk_1", project_path=target_project))
 
         assert "error" not in result
+        assert result["found"] is True
         assert server._current_project == original_project
         assert server._index_manager is original_im
         assert server._searcher is original_searcher
@@ -401,14 +407,17 @@ class TestClearIndex:
         mock_graph = MagicMock()
 
         with patch.object(server, "get_index_manager", return_value=mock_index_manager), \
-             patch.object(server, "get_code_graph", return_value=mock_graph) as get_graph, \
+             patch.object(server, "_graph_db_path") as mock_gpath, \
+             patch("mcp_server.code_search_server.CodeGraph", return_value=mock_graph), \
              patch("merkle.snapshot_manager.SnapshotManager") as SnapshotManagerMock:
+            mock_gpath.return_value = MagicMock(exists=MagicMock(return_value=True))
             result = json.loads(server.clear_index())
 
         assert result["success"] is True
+        assert result["vector_cleared"] is True
         assert result["graph_cleared"] is True
+        assert result["snapshot_cleared"] is True
         mock_index_manager.clear_index.assert_called_once()
-        get_graph.assert_called_once_with("/active/project")
         mock_graph.clear.assert_called_once()
         SnapshotManagerMock.return_value.delete_snapshot.assert_called_once_with("/active/project")
 

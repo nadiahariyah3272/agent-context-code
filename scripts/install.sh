@@ -7,7 +7,7 @@ set -euo pipefail
 
 REPO_URL="https://github.com/tlines2016/agent-context-code"
 PROJECT_DIR="${HOME}/.local/share/agent-context-code"
-STORAGE_DIR="${CODE_SEARCH_STORAGE:-${HOME}/.claude_code_search}"
+STORAGE_DIR="${CODE_SEARCH_STORAGE:-${HOME}/.agent_code_search}"
 MODEL_NAME="${CODE_SEARCH_MODEL:-Qwen/Qwen3-Embedding-0.6B}"
 
 # msg: wrapper around printf for consistent single-line output.

@@ -1,4 +1,4 @@
-"""FastMCP server for Claude Code integration - main entry point."""
+"""FastMCP server for AI coding assistant integration - main entry point."""
 import sys
 from pathlib import Path
 
@@ -27,14 +27,14 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Code Search MCP Server – local semantic code search for Claude Code.",
+        description="Code Search MCP Server – local semantic code search for AI coding assistants.",
         epilog=(
             "Examples:\n"
             "  %(prog)s                    # Start with default stdio transport\n"
             "  %(prog)s --transport sse    # Start with Server-Sent Events transport\n"
             "  %(prog)s --version          # Show version and exit\n"
             "\n"
-            "Register with Claude Code:\n"
+            "Register with your MCP client (example for Claude Code):\n"
             "  claude mcp add code-search --scope user -- uv run --directory <install-dir> python mcp_server/server.py\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,

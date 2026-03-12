@@ -40,7 +40,7 @@ things up by meaning, not just by filename or string match.
 - **Search by intent** — ask for `where do we validate auth tokens?` instead of guessing filenames.
 - **Everything stays local** — your source code never leaves your machine. No hosted services, no uploads.
 - **Persistent index** — the index survives across sessions, so you don't have to re-explain your repo every time.
-- **Agent-agnostic** — built on MCP, so any compatible agent client can use it (Claude Code is the best-tested today).
+- **Agent-agnostic** — built on MCP, so any compatible client can use it (Claude Code is best-tested today, and many users run it with Cursor, Codex CLI, Gemini CLI, and VS Code setups like Copilot Chat/Cline/Roo/Continue).
 
 ## What It Uses Today
 
@@ -49,13 +49,13 @@ things up by meaning, not just by filename or string match.
 | **Vector database** | LanceDB (embedded, serverless — like SQLite for vectors) |
 | **Relational graph** | SQLite (structural relationships: containment + cross-file inheritance today; calls/imports are planned) |
 | **Search** | Hybrid (BM25 keyword + vector similarity), automatically enabled |
-| **Storage** | `~/.claude_code_search` (or `CODE_SEARCH_STORAGE` env var) |
-| **Per-project index** | `~/.claude_code_search/projects/{name}_{hash}` |
+| **Storage** | `~/.agent_code_search` (or `CODE_SEARCH_STORAGE` env var) |
+| **Per-project index** | `~/.agent_code_search/projects/{name}_{hash}` |
 | **Chunking** | Python AST, tree-sitter, and structured config parsing |
 | **Change detection** | Merkle DAG (content hashes — only changed files are re-indexed) |
 | **Default embedding model** | `Qwen/Qwen3-Embedding-0.6B` (non-gated, runs on CPU or GPU) |
 | **Default reranker** | `cross-encoder/ms-marco-MiniLM-L-6-v2` (22.7M, opt-in) |
-| **Primary client** | Claude Code via MCP |
+| **Supported clients** | Claude Code (best-tested), Cursor, Codex CLI, Gemini CLI, VS Code MCP setups (Copilot Chat extension, Cline/Roo, Continue), and other MCP clients |
 
 ## System Requirements
 
@@ -138,9 +138,12 @@ policy:
 
 - Graph indexing is **always on** during indexing runs, so structural context is
   consistently available per project.
-- `search_code` can include lightweight relationship hints for top results.
+- `search_code` **already includes lightweight graph enrichment by default** for
+  normal search responses (relationship hints only, bounded payload; not full
+  graph expansion).
 - `get_graph_context` remains the dedicated deep-traversal tool when an agent
-  needs richer structural neighborhoods around a specific chunk.
+  needs richer structural neighborhoods around a specific chunk (full symbols +
+  edges neighborhood up to `max_depth`).
 
 ## Quick Start
 
@@ -148,9 +151,9 @@ Five steps from zero to working code search:
 
 1. **Install prerequisites** (Python 3.12+, uv, git)
 2. **Run the installer** (one command)
-3. **Register the MCP server** (run this in your terminal, not inside Claude)
+3. **Register the MCP server** (run this in your terminal, not inside your MCP client session)
 4. **Verify** (`claude mcp list`)
-5. **Use it** ("index this codebase" inside Claude Code)
+5. **Use it** ("index this codebase" inside your AI coding assistant)
 
 ## 1. Prerequisites
 
@@ -301,12 +304,12 @@ Other options:
 - `google/embeddinggemma-300m`: legacy default (gated — requires HF auth, see [Advanced: Using Gated Models](#advanced-using-gated-models))
 - `Salesforce/SFR-Embedding-Code-400M_R`: code-search-focused alternative
 
-The selected model is persisted to `~/.claude_code_search/install_config.json`.
+The selected model is persisted to `~/.agent_code_search/install_config.json`.
 
 ## 3. Register The MCP Server
 
-> **Important:** Run this command in your terminal, outside any Claude Code
-> session. Once registered, the tools are available inside Claude automatically.
+> **Important:** Run this command in your terminal, outside your MCP client
+> session. Once registered, the tools are available inside your assistant automatically.
 
 ### macOS / Linux / Git Bash / WSL
 
@@ -318,6 +321,20 @@ claude mcp add code-search --scope user -- uv run --directory ~/.local/share/age
 
 ```powershell
 claude mcp add code-search --scope user -- uv run --directory "$env:LOCALAPPDATA\agent-context-code" python mcp_server/server.py
+```
+
+### Other MCP Clients
+
+Use your client's MCP configuration format and point it at the same server command:
+
+```bash
+uv run --directory ~/.local/share/agent-context-code python mcp_server/server.py
+```
+
+On Windows, use:
+
+```powershell
+uv run --directory "$env:LOCALAPPDATA\agent-context-code" python mcp_server/server.py
 ```
 
 ## 4. Verify The Install
@@ -342,7 +359,7 @@ uv run --directory "$env:LOCALAPPDATA\agent-context-code" python scripts/cli.py 
 
 ## 5. Use It
 
-Open Claude Code in your project and say:
+Open your AI coding assistant in your project and say:
 
 ```text
 index this codebase
@@ -362,7 +379,7 @@ There are two ways to interact with AGENT Context Local:
   diagnostics. Run these in your terminal directly.
   Examples: `doctor`, `setup-guide`, `models list`, `mcp-check`
 
-- **MCP tools** — used inside Claude Code sessions for indexing and searching.
+- **MCP tools** — used inside your MCP client sessions for indexing and searching.
   These are available automatically after MCP registration.
 
 ### Available MCP Tools
@@ -370,9 +387,9 @@ There are two ways to interact with AGENT Context Local:
 | Tool | Description |
 |------|-------------|
 | `index_directory("/path")` | Index a project (incremental by default) |
-| `search_code("query")` | Hybrid semantic + keyword search |
+| `search_code("query")` | Hybrid semantic + keyword search with lightweight graph relationship enrichment by default |
 | `find_similar_code(chunk_id)` | Find code similar to a known chunk |
-| `get_graph_context(chunk_id)` | Navigate structural relationships (contains/inherits today; other edge types when available) |
+| `get_graph_context(chunk_id)` | Deep graph context lookup for a chunk (full neighborhood traversal up to `max_depth`) |
 | `get_index_status` | Index statistics, model info, graph stats |
 | `list_projects` | List all indexed projects |
 | `switch_project("/path")` | Change the active project |
@@ -381,7 +398,7 @@ There are two ways to interact with AGENT Context Local:
 
 ## Recommended: Add to Your Project
 
-You can help Claude (and other agents) automatically discover and use code
+You can help Claude (and other agents like Cursor/Codex/Gemini/VS Code MCP clients) automatically discover and use code
 search by dropping a short snippet into your project's instruction file.
 
 ### For CLAUDE.md (Claude Code reads this automatically)
@@ -396,9 +413,12 @@ When exploring the codebase or looking for code by meaning, use the
 - "find error handling patterns"
 - "where is the database connection configured?"
 
-To explore how a specific function connects to the rest of the codebase
-(parent classes, containment, and additional edge types when available), use `get_graph_context(chunk_id)` with
-a chunk_id from a `search_code` result.
+`search_code` already returns lightweight graph enrichment in normal results
+when available (relationship hints only, bounded payload).
+
+For deeper structural exploration of a specific result (full neighborhood up to
+`max_depth`), use `get_graph_context(chunk_id)` with a chunk_id from a
+`search_code` result.
 
 If the index seems stale, run `index_directory` to refresh it.
 Use `get_index_status` to check index health and model info.
@@ -419,21 +439,24 @@ To retry the model download:
 ### macOS / Linux / Git Bash / WSL
 
 ```bash
-uv run --directory ~/.local/share/agent-context-code python scripts/download_model_standalone.py --storage-dir ~/.claude_code_search --model "Qwen/Qwen3-Embedding-0.6B" -v
+uv run --directory ~/.local/share/agent-context-code python scripts/download_model_standalone.py --storage-dir ~/.agent_code_search --model "Qwen/Qwen3-Embedding-0.6B" -v
 ```
 
 ### Windows PowerShell
 
 ```powershell
-uv run --directory "$env:LOCALAPPDATA\agent-context-code" python scripts/download_model_standalone.py --storage-dir "$env:USERPROFILE\.claude_code_search" --model "Qwen/Qwen3-Embedding-0.6B" -v
+uv run --directory "$env:LOCALAPPDATA\agent-context-code" python scripts/download_model_standalone.py --storage-dir "$env:USERPROFILE\.agent_code_search" --model "Qwen/Qwen3-Embedding-0.6B" -v
 ```
 
 ## Storage Layout
 
 ```text
-~/.claude_code_search/          # 0700 on Unix/macOS (owner-only access)
+~/.agent_code_search/           # 0700 on Unix/macOS (owner-only access)
 ├── models/
 ├── install_config.json
+├── merkle/                     # Merkle snapshots/metadata (global per-machine store)
+│   ├── {project_hash}_snapshot.json
+│   └── {project_hash}_metadata.json
 └── projects/
     └── {project_name}_{hash}/
         ├── project_info.json
@@ -442,7 +465,6 @@ uv run --directory "$env:LOCALAPPDATA\agent-context-code" python scripts/downloa
         │   │   └── code_chunks.lance/   # vector + FTS index
         │   ├── code_graph.db            # SQLite relational graph
         │   └── stats.json
-        └── snapshots/                   # Merkle DAG snapshots for change detection
 ```
 
 Your project workspace stays clean — all database files live in this central
@@ -646,7 +668,7 @@ This is useful when tools are installed on one side but configured from the othe
 - Run Windows commands: `cmd.exe /c dir`
 - Call Windows binaries: `docker.exe ps`
 
-For example, if your agent CLI (Codex, Claude Code, etc.) is installed in WSL2
+For example, if your agent CLI (Codex, Gemini CLI, Claude Code, etc.) is installed in WSL2
 but Docker Desktop is a Windows Store app, you can still configure MCP servers
 that call Windows executables:
 
@@ -721,7 +743,7 @@ Or if you have a local clone:
 ### What gets removed
 
 - **App checkout**: `~/.local/share/agent-context-code` (Unix) or `%LOCALAPPDATA%\agent-context-code` (Windows)
-- **Storage root**: `~/.claude_code_search` (or `CODE_SEARCH_STORAGE` override) — includes models, indexes, and config
+- **Storage root**: `~/.agent_code_search` (or `CODE_SEARCH_STORAGE` override) — includes models, indexes, and config
 - **MCP registration**: the `code-search` server entry
 
 ### What is NOT removed

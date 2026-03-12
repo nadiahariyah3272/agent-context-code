@@ -51,8 +51,8 @@ def main():
     )
     parser.add_argument(
         "--storage-dir",
-        default=str(Path.home() / ".claude_code_search"),
-        help="Directory to store index and embeddings (default: ~/.claude_code_search)"
+        default=str(Path.home() / ".agent_code_search"),
+        help="Directory to store index and embeddings (default: ~/.agent_code_search)"
     )
     parser.add_argument(
         "--batch-size",
@@ -184,7 +184,7 @@ def main():
                 logger.info(f"  {tag}: {count}")
         
         logger.info(f"\nStorage location: {storage_dir}")
-        logger.info("\nYou can now use the MCP server for Claude Code integration:")
+        logger.info("\nYou can now use the MCP server with your AI coding assistant:")
         logger.info(f"  python {Path(__file__).parent.parent / 'mcp_server' / 'server.py'}")
         
     except KeyboardInterrupt:
