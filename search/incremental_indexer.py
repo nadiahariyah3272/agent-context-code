@@ -13,6 +13,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from filelock import FileLock, Timeout
+
+from common_utils import get_project_lock_path
 from merkle.change_detector import ChangeDetector, FileChanges
 from merkle.ignore_rules import IgnoreRules
 from merkle.merkle_dag import MerkleDAG
@@ -41,6 +44,7 @@ class IncrementalIndexResult:
     graph_sync_ok: bool = True
     graph_sync_error: Optional[str] = None
     ignore_stats: Dict = field(default_factory=dict)
+    lock_contention: bool = False
 
     def to_dict(self) -> Dict:
         """Convert to dictionary."""
@@ -55,6 +59,8 @@ class IncrementalIndexResult:
             'error': self.error,
             'graph_sync_ok': self.graph_sync_ok,
         }
+        if self.lock_contention:
+            result['lock_contention'] = True
         if self.skipped_files:
             result['skipped_files'] = self.skipped_files
             result['skipped_file_count'] = len(self.skipped_files)
@@ -80,13 +86,18 @@ class AddChunksResult:
 
 class IncrementalIndexer:
     """Handles incremental indexing of code changes.
-    
+
     When a ``code_graph`` is provided, parsed chunks are also fed into the
     SQLite relational graph for structural relationship tracking.  The
     graph is optional — when *None*, behaviour is identical to the original
     vector-only pipeline.
     """
-    
+
+    # Non-blocking for full index — the caller should not wait.
+    _FULL_INDEX_LOCK_TIMEOUT = 0
+    # Brief wait for lightweight incremental ops.
+    _INCREMENTAL_LOCK_TIMEOUT = 5
+
     def __init__(
         self,
         indexer: Optional[Indexer] = None,
@@ -127,21 +138,25 @@ class IncrementalIndexer:
         self,
         project_path: str,
         project_name: Optional[str] = None,
-        force_full: bool = False
+        force_full: bool = False,
+        lock_timeout: Optional[float] = None,
     ) -> IncrementalIndexResult:
         """Perform incremental indexing of a project.
-        
+
         Args:
             project_path: Path to project
             project_name: Optional project name
             force_full: Force full reindex even if snapshot exists
-            
+            lock_timeout: Override lock timeout (seconds). When *None*,
+                uses ``_FULL_INDEX_LOCK_TIMEOUT`` for full indexes and
+                ``_INCREMENTAL_LOCK_TIMEOUT`` for incremental ones.
+
         Returns:
             IncrementalIndexResult with statistics
         """
         start_time = time.time()
         project_path = str(Path(project_path).resolve())
-        
+
         if not project_name:
             project_name = Path(project_path).name
 
@@ -152,20 +167,56 @@ class IncrementalIndexer:
         ignore_sig = IgnoreRules.compute_signature(Path(project_path))
         indexing_config = {**(indexing_config or {}), "ignore_signature": ignore_sig}
 
+        # Determine if this will be a full index BEFORE acquiring the lock
+        # so we can pick the right timeout.
+        is_full = force_full or not self.snapshot_manager.has_snapshot(project_path)
+        if not is_full:
+            snapshot_metadata = self.snapshot_manager.load_metadata(project_path) or {}
+            if snapshot_metadata.get('indexing_config') != indexing_config:
+                is_full = True
+
+        if lock_timeout is not None:
+            timeout = lock_timeout
+        else:
+            timeout = (
+                self._FULL_INDEX_LOCK_TIMEOUT if is_full
+                else self._INCREMENTAL_LOCK_TIMEOUT
+            )
+
+        lock_path = get_project_lock_path(project_path)
+        lock = FileLock(lock_path, timeout=timeout)
+
         try:
-            # Check if we should do full index
-            if force_full or not self.snapshot_manager.has_snapshot(project_path):
+            lock.acquire()
+        except Timeout:
+            logger.info(
+                "Lock contention for %s — another process is indexing; skipping.",
+                project_name,
+            )
+            return IncrementalIndexResult(
+                files_added=0,
+                files_removed=0,
+                files_modified=0,
+                chunks_added=0,
+                chunks_removed=0,
+                time_taken=time.time() - start_time,
+                success=True,
+                lock_contention=True,
+            )
+
+        try:
+            # Re-evaluate snapshot state inside the lock to avoid redundant
+            # work if another process finished while we were waiting.
+            is_full = force_full or not self.snapshot_manager.has_snapshot(project_path)
+            if not is_full:
+                snapshot_metadata = self.snapshot_manager.load_metadata(project_path) or {}
+                if snapshot_metadata.get('indexing_config') != indexing_config:
+                    is_full = True
+
+            if is_full:
                 logger.info(f"Performing full index for {project_name}")
                 return self._full_index(project_path, project_name, start_time, indexing_config)
 
-            snapshot_metadata = self.snapshot_manager.load_metadata(project_path) or {}
-            if snapshot_metadata.get('indexing_config') != indexing_config:
-                logger.info(
-                    "Indexing configuration changed for %s; performing a full reindex to remove stale chunks.",
-                    project_name,
-                )
-                return self._full_index(project_path, project_name, start_time, indexing_config)
-            
             # Detect changes
             logger.info(f"Detecting changes in {project_name}")
             changes, current_dag = self.detect_changes(project_path)
@@ -183,13 +234,13 @@ class IncrementalIndexer:
                     success=True,
                     ignore_stats=ignore_stats,
                 )
-            
+
             # Log changes
             logger.info(
                 f"Changes detected - Added: {len(changes.added)}, "
                 f"Removed: {len(changes.removed)}, Modified: {len(changes.modified)}"
             )
-            
+
             # Process changes
             chunks_removed = self._remove_old_chunks(changes, project_name, project_path)
             add_result = self._add_new_chunks(changes, project_path, project_name)
@@ -278,7 +329,7 @@ class IncrementalIndexer:
                 graph_sync_error=graph_sync_error,
                 ignore_stats=ignore_stats,
             )
-            
+
         except Exception as e:
             logger.error(f"Incremental indexing failed: {e}")
             return IncrementalIndexResult(
@@ -291,6 +342,8 @@ class IncrementalIndexer:
                 success=False,
                 error=str(e)
             )
+        finally:
+            lock.release()
     
     def _full_index(
         self,
@@ -623,24 +676,31 @@ class IncrementalIndexer:
         # Quick check for changes
         return self.change_detector.quick_check(project_path)
     
-    def auto_reindex_if_needed(self, project_path: str, project_name: Optional[str] = None, 
-                              max_age_minutes: float = 5) -> IncrementalIndexResult:
+    def auto_reindex_if_needed(
+        self,
+        project_path: str,
+        project_name: Optional[str] = None,
+        max_age_minutes: float = 5,
+        lock_timeout: Optional[float] = None,
+    ) -> IncrementalIndexResult:
         """Automatically reindex if the index is stale.
-        
+
         Args:
             project_path: Path to project
             project_name: Optional project name
             max_age_minutes: Maximum age before auto-reindex (default 5 minutes)
-            
+            lock_timeout: Override lock timeout passed through to
+                ``incremental_index()``.
+
         Returns:
             IncrementalIndexResult with statistics
         """
         import time
         start_time = time.time()
-        
+
         if self.needs_reindex(project_path, max_age_minutes):
             logger.info(f"Auto-reindexing {project_path} (index older than {max_age_minutes} minutes)")
-            return self.incremental_index(project_path, project_name)
+            return self.incremental_index(project_path, project_name, lock_timeout=lock_timeout)
         else:
             logger.debug(f"Index for {project_path} is fresh, skipping reindex")
             return IncrementalIndexResult(

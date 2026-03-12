@@ -66,6 +66,7 @@ dependencies = [
     # transformers: pinned explicitly for Qwen3 model support (satisfied
     # transitively by sentence-transformers, but documented here for clarity).
     "transformers>=4.51.0",
+    "filelock>=3.13",
     "pathspec>=0.12.1",
     "tree-sitter>=0.20.0",
     "tree-sitter-c>=0.24.1",
@@ -79,6 +80,7 @@ dependencies = [
     "tree-sitter-python>=0.23.6",
     "tree-sitter-rust>=0.24.0",
     "tree-sitter-svelte>=1.0.2",
+    "torch>=2.10.0",
     "tree-sitter-typescript>=0.23.2",
 ]
 
@@ -123,3 +125,13 @@ include = ["chunking*", "embeddings*", "search*", "mcp_server*", "merkle*", "rer
 [tool.setuptools.package-data]
 mcp_server = ["strings.yaml"]
 "*" = ["py.typed"]
+
+[tool.uv]
+
+[[tool.uv.index]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch" }

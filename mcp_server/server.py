@@ -3,15 +3,66 @@ import logging
 import os
 
 try:
-    from common_utils import VERSION, is_installed_package  # works when installed as package
+    from common_utils import VERSION, is_installed_package, detect_gpu_index_url  # works when installed as package
 except ImportError:
     import sys
     from pathlib import Path
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from common_utils import VERSION, is_installed_package
+    from common_utils import VERSION, is_installed_package, detect_gpu_index_url
 
 from mcp_server.code_search_server import CodeSearchServer
 from mcp_server.code_search_mcp import CodeSearchMCP
+
+
+def _ensure_gpu_configured() -> None:
+    """One-time GPU auto-detection at server startup.
+
+    If GPU hardware is detected but uv.toml doesn't exist (meaning no
+    install script or gpu-setup was run), auto-configure GPU PyTorch.
+    Takes effect on next server restart.
+    """
+    import subprocess
+    from pathlib import Path
+
+    project_dir = Path(__file__).resolve().parent.parent
+    uv_toml = project_dir / "uv.toml"
+
+    # Skip if already configured (install script or gpu-setup already ran)
+    if uv_toml.exists():
+        return
+
+    # Skip if running as installed package (no pyproject.toml to work with)
+    if not (project_dir / "pyproject.toml").exists():
+        return
+
+    # Detect GPU hardware (without relying on torch — CPU torch can't detect GPUs)
+    vendor, _ver, _name, index_url = detect_gpu_index_url()
+
+    if not index_url:
+        return  # No GPU, MPS (needs no special index), or unsupported
+
+    # Write uv.toml
+    uv_toml.write_text(
+        f"# Auto-generated — GPU detected at server startup.\n"
+        f"# To revert to CPU: delete this file or run gpu-setup --cpu\n\n"
+        f"[[index]]\nname = \"pytorch\"\n"
+        f"url = \"{index_url}\"\nexplicit = true\n"
+    )
+
+    # Re-lock in background (non-blocking so server starts quickly).
+    # The next `uv run` (on server restart) will sync automatically.
+    subprocess.Popen(
+        ["uv", "lock", "--upgrade-package", "torch"],
+        cwd=project_dir,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+
+    logger = logging.getLogger(__name__)
+    logger.info(
+        "GPU detected — configured GPU PyTorch (%s). "
+        "GPU acceleration will be active on next server restart.",
+        index_url.split("/")[-1],
+    )
 
 
 def _configure_logging(verbose: bool = False) -> None:
@@ -86,6 +137,13 @@ def main():
 
     _configure_logging(verbose=args.verbose)
     logger = logging.getLogger(__name__)
+
+    # Auto-detect GPU and write uv.toml if needed (takes effect on next restart)
+    try:
+        _ensure_gpu_configured()
+    except Exception:
+        pass  # Non-critical — don't block server startup
+
     logger.info("Starting Code Search MCP Server v%s (transport=%s)", VERSION, args.transport)
 
     # Create and run server

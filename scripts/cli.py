@@ -44,6 +44,7 @@ try:
         save_local_install_config,
         load_reranker_config,
         save_reranker_config,
+        detect_gpu_index_url,
     )
 except ImportError:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -55,6 +56,7 @@ except ImportError:
         save_local_install_config,
         load_reranker_config,
         save_reranker_config,
+        detect_gpu_index_url,
     )
 
 INSTALL_SH_URL = "https://raw.githubusercontent.com/tlines2016/agent-context-code/main/scripts/install.sh"
@@ -522,10 +524,7 @@ def cmd_doctor() -> None:
                 if gpu_cfg.get("vendor") and gpu_cfg["vendor"] != "cpu":
                     saved_url = gpu_cfg.get("torch_index_url", "")
                     print(f"  {yellow('!')} GPU was detected during install ({gpu_cfg['vendor']}) but PyTorch lacks GPU support")
-                    if saved_url:
-                        print(f"    Fix: uv pip install torch --index-url {saved_url} --reinstall")
-                    else:
-                        print(f"    Fix: run '{_cmd_prefix()} gpu-setup' to install GPU PyTorch")
+                    print(f"    Fix: run '{_cmd_prefix()} gpu-setup' to install GPU PyTorch")
                     warnings.append("GPU config exists but PyTorch is CPU-only — GPU acceleration inactive")
                 else:
                     print(f"  {cyan('ℹ')} GPU model auto-upgrade: not applicable (CPU-only)")
@@ -1107,36 +1106,34 @@ def _print_json_config(mcp_cmd: str) -> None:
 # ── GPU setup command ─────────────────────────────────────────────────
 
 def cmd_gpu_setup() -> None:
-    """Detect GPU hardware and install the matching PyTorch build.
+    """Detect GPU hardware and configure PyTorch for GPU acceleration.
 
-    GPU PyTorch & uv interaction
-    ----------------------------
-    PyTorch publishes GPU builds as PEP 440 local versions (e.g.
-    ``torch==2.10.0+cu128``).  ``uv.lock`` pins the CPU build
-    (``torch==2.10.0`` from PyPI).  Every ``uv run`` or ``uv sync``
-    call silently reverts GPU torch to CPU because uv prefers non-local
-    versions over local ones.
-
-    The install scripts (``install.sh`` / ``install.ps1``) work around
-    this by:
-
-    1. Installing GPU torch via ``uv pip install --index-url``
-    2. Using ``.venv/bin/python`` directly for post-install checks
-       (not ``uv run``, which triggers a sync)
-    3. Adding ``--no-sync`` to all subsequent ``uv run`` calls
-    4. Printing ``--no-sync`` in MCP registration commands
-    5. Saving ``torch_index_url`` to ``install_config.json`` so
-       ``doctor`` can detect mismatches and print recovery commands
-
-    This function (``gpu-setup``) follows the same pattern.  If you
-    modify the GPU torch installation flow, you MUST preserve the
-    ``--no-sync`` workaround or replace it with a solution that
-    prevents ``uv run`` from reverting the GPU build.
+    Uses ``uv.toml`` overlay to redirect torch resolution through the
+    GPU-specific PyTorch index.  After writing ``uv.toml``, re-locks and
+    syncs so that ALL subsequent ``uv run`` commands use GPU torch — no
+    ``--no-sync`` flag needed.
     """
     print(bold("GPU Setup\n"))
 
+    # Check for --cpu flag → revert to CPU
+    if "--cpu" in sys.argv:
+        print(f"  Reverting to CPU PyTorch...")
+        if _remove_gpu_uv_toml():
+            project_dir = Path(__file__).resolve().parent.parent
+            print(f"  Removed uv.toml GPU override.")
+            print(f"  Re-locking and syncing...")
+            lock_rc = subprocess.run(["uv", "lock", "--upgrade-package", "torch"], cwd=project_dir).returncode
+            sync_rc = subprocess.run(["uv", "sync"], cwd=project_dir).returncode
+            if lock_rc == 0 and sync_rc == 0:
+                print(f"\n  {green('✓')} Reverted to CPU PyTorch.\n")
+            else:
+                print(f"\n  {yellow('!')} uv lock/sync had issues. Try running 'uv sync' manually.\n")
+        else:
+            print(f"  {cyan('ℹ')} No GPU override found — already using CPU.\n")
+        return
+
     # Step 1: Detect hardware
-    vendor, cuda_ver, gpu_name, index_url = _detect_gpu_for_setup()
+    vendor, cuda_ver, gpu_name, index_url = detect_gpu_index_url()
 
     if vendor == "mps":
         print(f"  {green('✓')} Apple Silicon detected ({gpu_name})")
@@ -1165,142 +1162,119 @@ def cmd_gpu_setup() -> None:
 
     if not index_url:
         print(f"  {yellow('!')} Could not determine the right PyTorch build for your hardware.")
-        print(f"    Install manually: uv pip install torch --index-url <url> --reinstall")
+        print(f"    Run gpu-setup again after updating your GPU drivers.")
         return
 
-    # Step 2: Check current PyTorch build
-    try:
-        result = subprocess.run(
-            [sys.executable, "-c", "import torch; print(torch.__version__)"],
-            capture_output=True, text=True, timeout=15,
-        )
-        current = result.stdout.strip() if result.returncode == 0 else "unknown"
-    except Exception:
-        current = "unknown"
-
-    print(f"  Current PyTorch: {current}")
-
-    already_gpu = "cu" in current or "rocm" in current
-    if already_gpu:
-        print(f"  {green('✓')} PyTorch already has GPU support.\n")
+    # Step 2: Check if uv.toml already has the correct index URL (idempotency)
+    existing_url = _read_gpu_uv_toml()
+    if existing_url == index_url:
+        print(f"  {green('✓')} GPU PyTorch already configured (uv.toml points to {index_url}).\n")
         _verify_torch_gpu()
         return
 
-    # Step 3: Install GPU PyTorch
-    print(f"\n  Installing GPU-accelerated PyTorch...")
-    print(f"  Command: uv pip install torch --index-url {index_url} --reinstall\n")
-
-    try:
-        result = subprocess.run(
-            ["uv", "pip", "install", "torch", "--index-url", index_url, "--reinstall"],
-            timeout=600,
-        )
-        if result.returncode == 0:
-            print(f"\n  {green('✓')} GPU-accelerated PyTorch installed successfully.")
-            # Update uv.lock so future `uv run` calls don't revert to CPU torch.
-            # Without this, uv re-syncs from the lockfile on every `uv run` and
-            # overwrites the GPU build.  `uv lock --upgrade-package torch` refreshes
-            # only the torch entry while leaving everything else pinned.
-            _update_torch_lockfile(index_url)
-            _verify_torch_gpu()
-        else:
-            print(f"\n  {red('✗')} Installation failed. Retry manually:")
-            print(f"    uv pip install torch --index-url {index_url} --reinstall\n")
-    except subprocess.TimeoutExpired:
-        print(f"\n  {yellow('!')} Installation timed out. Retry manually:")
-        print(f"    uv pip install torch --index-url {index_url} --reinstall\n")
-    except Exception as exc:
-        print(f"\n  {red('✗')} Installation error: {exc}\n")
-
-
-def _update_torch_lockfile(index_url: str) -> None:
-    """Print --no-sync instructions after a GPU torch install.
-
-    uv syncs the venv against uv.lock before every `uv run`.  After gpu-setup
-    installs GPU torch, the next `uv run` reverts it to CPU (uv.lock still pins
-    the CPU build).  The correct fix is `--no-sync` on the MCP server command,
-    which skips the venv sync and uses whatever is in the venv as-is.
-
-    The install script already sets up the venv correctly (uv sync + GPU torch),
-    so --no-sync is safe — it just prevents the silent revert.
-    """
+    # Step 3: Write uv.toml with GPU index URL
     project_dir = Path(__file__).resolve().parent.parent
-    mcp_dir = str(project_dir)
+    print(f"  Writing uv.toml GPU override...")
+    if not _write_gpu_uv_toml(index_url):
+        print(f"  {red('✗')} Failed to write uv.toml")
+        return
 
-    print(f"\n  {yellow('!')} Important: uv reverts GPU torch on every `uv run` (syncs from uv.lock).")
-    print(f"  Add --no-sync to your MCP server command to prevent this:\n")
+    # Step 4: Re-lock and sync
+    print(f"  Re-locking torch from GPU index...")
+    lock_result = subprocess.run(
+        ["uv", "lock", "--upgrade-package", "torch"],
+        cwd=project_dir, timeout=300,
+    )
+    if lock_result.returncode != 0:
+        print(f"\n  {yellow('!')} uv lock failed — falling back to uv pip install...")
+        fallback = subprocess.run(
+            ["uv", "pip", "install", "torch", "--index-url", index_url, "--reinstall"],
+            cwd=project_dir, timeout=600,
+        )
+        if fallback.returncode == 0:
+            print(f"  {green('✓')} GPU torch installed via fallback (uv pip install).")
+            print(f"  {yellow('!')} Note: uv.toml is in place but lockfile may not reflect GPU torch.")
+            print(f"    If torch reverts to CPU, re-run: {_cmd_prefix()} gpu-setup")
+        else:
+            print(f"  {red('✗')} GPU torch installation failed.")
+            _remove_gpu_uv_toml()
+        _verify_torch_gpu()
+        return
+
+    print(f"  Syncing venv...")
+    subprocess.run(["uv", "sync"], cwd=project_dir, timeout=600)
+
+    # Step 5: Save GPU info to install_config.json
+    try:
+        config = load_local_install_config()
+        config["gpu"] = {
+            "vendor": vendor,
+            "torch_index_url": index_url,
+            "status": f"{vendor}-{index_url.split('/')[-1]}",
+        }
+        config_path = Path(get_storage_dir()) / "install_config.json"
+        config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    except Exception:
+        pass  # Non-critical
+
+    # Step 6: Report success with clean MCP command (no --no-sync!)
+    mcp_dir = str(project_dir)
+    print(f"\n  {green('✓')} GPU-accelerated PyTorch configured successfully.")
+    print(f"  All future 'uv run' commands will use GPU torch automatically.\n")
+
+    print(f"  Register the MCP server (no --no-sync needed):")
     print(f"    claude mcp remove code-search")
     if sys.platform == "win32":
-        print(f'    claude mcp add code-search --scope user -- uv run --no-sync --directory "{mcp_dir}" python mcp_server/server.py')
+        print(f'    claude mcp add code-search --scope user -- uv run --directory "{mcp_dir}" python mcp_server/server.py')
     else:
-        print(f"    claude mcp add code-search --scope user -- uv run --no-sync --directory '{mcp_dir}' python mcp_server/server.py")
-    print(f"\n  --no-sync skips the venv sync step so GPU torch is not overwritten.\n")
+        print(f"    claude mcp add code-search --scope user -- uv run --directory '{mcp_dir}' python mcp_server/server.py")
+    print()
+
+    _verify_torch_gpu()
 
 
-def _detect_gpu_for_setup():
-    """Detect GPU vendor and return (vendor, version, name, index_url)."""
-    # Apple Silicon
-    if platform.system() == "Darwin" and platform.machine() == "arm64":
-        return ("mps", None, "Apple Silicon", None)
+def _write_gpu_uv_toml(index_url: str) -> bool:
+    """Write uv.toml with a GPU PyTorch index override. Returns True on success."""
+    project_dir = Path(__file__).resolve().parent.parent
+    uv_toml = project_dir / "uv.toml"
+    try:
+        uv_toml.write_text(
+            f"# Auto-generated by gpu-setup — overrides pytorch index for GPU wheels.\n"
+            f"# To revert to CPU: delete this file or run gpu-setup --cpu\n\n"
+            f"[[index]]\n"
+            f'name = "pytorch"\n'
+            f'url = "{index_url}"\n'
+            f"explicit = true\n",
+            encoding="utf-8",
+        )
+        return True
+    except OSError:
+        return False
 
-    # NVIDIA
-    if shutil.which("nvidia-smi"):
-        gpu_name = "unknown"
-        cuda_ver = None
-        try:
-            result = subprocess.run(
-                ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
-                capture_output=True, text=True, timeout=5,
-            )
-            if result.returncode == 0:
-                gpu_name = result.stdout.strip().splitlines()[0]
-        except Exception:
-            pass
-        try:
-            result = subprocess.run(
-                ["nvidia-smi"], capture_output=True, text=True, timeout=5,
-            )
-            import re
-            m = re.search(r"CUDA Version:\s*(\d+)\.(\d+)", result.stdout)
-            if m:
-                major, minor = int(m.group(1)), int(m.group(2))
-                cuda_ver = f"{major}.{minor}"
-                if major >= 13 or (major == 12 and minor >= 8):
-                    url = "https://download.pytorch.org/whl/cu128"
-                elif major == 12 and minor >= 6:
-                    url = "https://download.pytorch.org/whl/cu126"
-                elif major == 12 and minor >= 4:
-                    url = "https://download.pytorch.org/whl/cu124"
-                elif major == 12:
-                    url = "https://download.pytorch.org/whl/cu121"
-                elif major == 11 and minor >= 8:
-                    url = "https://download.pytorch.org/whl/cu118"
-                else:
-                    url = None
-                return ("nvidia", cuda_ver, gpu_name, url)
-        except Exception:
-            pass
-        return ("nvidia", cuda_ver, gpu_name, None)
 
-    # AMD ROCm
-    if shutil.which("rocminfo") or shutil.which("rocm-smi"):
-        gpu_name = "unknown"
-        rocm_ver = None
-        try:
-            result = subprocess.run(
-                ["rocm-smi", "--showproductname"],
-                capture_output=True, text=True, timeout=5,
-            )
-            import re
-            m = re.search(r"GPU\[\d+\]\s*:\s*(.*)", result.stdout)
-            if m:
-                gpu_name = m.group(1).strip()
-        except Exception:
-            pass
-        url = "https://download.pytorch.org/whl/rocm6.2.4"
-        return ("amd", rocm_ver, gpu_name, url)
+def _remove_gpu_uv_toml() -> bool:
+    """Delete uv.toml to revert to CPU PyTorch. Returns True if file existed."""
+    project_dir = Path(__file__).resolve().parent.parent
+    uv_toml = project_dir / "uv.toml"
+    if uv_toml.exists():
+        uv_toml.unlink()
+        return True
+    return False
 
-    return ("cpu", None, None, None)
+
+def _read_gpu_uv_toml() -> Optional[str]:
+    """Read the current GPU index URL from uv.toml, or None if not present."""
+    project_dir = Path(__file__).resolve().parent.parent
+    uv_toml = project_dir / "uv.toml"
+    if not uv_toml.exists():
+        return None
+    try:
+        import re
+        content = uv_toml.read_text(encoding="utf-8")
+        m = re.search(r'url\s*=\s*"([^"]+)"', content)
+        return m.group(1) if m else None
+    except Exception:
+        return None
 
 
 def _verify_torch_gpu() -> None:

@@ -16,11 +16,13 @@ from datetime import datetime
 from functools import lru_cache
 
 try:
-    from common_utils import get_storage_dir, load_reranker_config
+    from common_utils import get_storage_dir, get_embedding_lock_path, load_reranker_config
 except ImportError:
     import sys
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from common_utils import get_storage_dir, load_reranker_config
+    from common_utils import get_storage_dir, get_embedding_lock_path, load_reranker_config
+
+from filelock import FileLock, Timeout as LockTimeout
 from chunking.multi_language_chunker import MultiLanguageChunker
 from embeddings.embedder import CodeEmbedder
 from search.indexer import CodeIndexManager
@@ -375,7 +377,8 @@ class CodeSearchServer:
 
                 reindex_result = incremental_indexer.auto_reindex_if_needed(
                     self._current_project,
-                    max_age_minutes=max_age_minutes
+                    max_age_minutes=max_age_minutes,
+                    lock_timeout=0,
                 )
 
                 if reindex_result.files_modified > 0 or reindex_result.files_added > 0:
@@ -639,11 +642,37 @@ class CodeSearchServer:
                 code_graph=code_graph,
             )
 
-            result = incremental_indexer.incremental_index(
-                str(directory_path),
-                project_name,
-                force_full=not incremental
-            )
+            # Determine if this will be a full index so we can gate on the
+            # global embedding lock (prevents 2x RAM/VRAM from concurrent
+            # model loads across different projects).
+            is_full = not incremental or not incremental_indexer.snapshot_manager.has_snapshot(str(directory_path))
+
+            embedding_lock = None
+            if is_full:
+                embedding_lock = FileLock(get_embedding_lock_path(), timeout=0)
+                try:
+                    embedding_lock.acquire()
+                except LockTimeout:
+                    logger.info(
+                        "Global embedding lock contention — another full index is running."
+                    )
+                    return json.dumps({
+                        "success": True,
+                        "lock_contention": True,
+                        "directory": str(directory_path),
+                        "project_name": project_name,
+                        "message": "Another project is currently being indexed. Please retry in a moment.",
+                    }, indent=2)
+
+            try:
+                result = incremental_indexer.incremental_index(
+                    str(directory_path),
+                    project_name,
+                    force_full=not incremental
+                )
+            finally:
+                if embedding_lock is not None:
+                    embedding_lock.release()
 
             stats = incremental_indexer.get_indexing_stats(str(directory_path))
 
@@ -660,6 +689,10 @@ class CodeSearchServer:
                 "time_taken": round(result.time_taken, 2),
                 "index_stats": stats
             }
+
+            if result.lock_contention:
+                response["lock_contention"] = True
+                response["message"] = "This project is already being indexed by another process."
 
             if result.graph_stats:
                 response["graph_stats"] = result.graph_stats
