@@ -1,176 +1,107 @@
 ```text
          __| |____________________________________________________________| |__
          __   ____________________________________________________________   __
-           | |                                                            | |  
-           | |         ___                    __                          | |  
-           | |        /   | ____ ____  ____  / /_                         | |  
-           | |       / /| |/ __ `/ _ \/ __ \/ __/                         | |  
-           | |      / ___ / /_/ /  __/ / / / /_                           | |  
-           | |     /_/  |_\__, /\___/_/ /_/\__/                           | |  
-           | |           /____/                                           | |  
-           | |               ______            __            __           | |  
-           | |              / ____/___  ____  / /____  _  __/ /_          | |  
-           | |             / /   / __ \/ __ \/ __/ _ \| |/_/ __/          | |  
-           | |            / /___/ /_/ / / / / /_/  __/>  </ /_            | |  
-           | |            \____/\____/_/ /_/\__/\___/_/|_|\__/            | |  
-           | |                              __                     __     | |  
-           | |                             / /   ____  _________ _/ /     | |  
-           | |                            / /   / __ \/ ___/ __ `/ /      | |  
-           | |                           / /___/ /_/ / /__/ /_/ / /       | |  
-           | |                          /_____/\____/\___/\__,_/_/        | |  
+           | |                                                            | |
+           | |         ___                    __                          | |
+           | |        /   | ____ ____  ____  / /_                         | |
+           | |       / /| |/ __ `/ _ \/ __ \/ __/                         | |
+           | |      / ___ / /_/ /  __/ / / / /_                           | |
+           | |     /_/  |_\__, /\___/_/ /_/\__/                           | |
+           | |           /____/                                           | |
+           | |               ______            __            __           | |
+           | |              / ____/___  ____  / /____  _  __/ /_          | |
+           | |             / /   / __ \/ __ \/ __/ _ \| |/_/ __/          | |
+           | |            / /___/ /_/ / / / / /_/  __/>  </ /_            | |
+           | |            \____/\____/_/ /_/\__/\___/_/|_|\__/            | |
+           | |                              __                     __     | |
+           | |                             / /   ____  _________ _/ /     | |
+           | |                            / /   / __ \/ ___/ __ `/ /      | |
+           | |                           / /___/ /_/ / /__/ /_/ / /       | |
+           | |                          /_____/\____/\___/\__,_/_/        | |
          __| |____________________________________________________________| |__
          __   ____________________________________________________________   __
-           | |                                                            | |  
+           | |                                                            | |
 ```
 
-AGENT Context Local is a local MCP code-search service that helps agents find
-the right code by meaning instead of exact strings. Your embeddings, vector
-index, and project metadata stay on your machine.
+![PyPI version](https://img.shields.io/pypi/v/agent-context-local)
+![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)
+![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)
+![MCP Compatible](https://img.shields.io/badge/MCP-compatible-blueviolet.svg)
+
+**Local semantic code search for AI coding assistants.**
+
+AGENT Context Local is an MCP server that indexes your codebase using
+tree-sitter AST-aware chunking and searches it with hybrid BM25 keyword +
+vector similarity ranking, combined via Reciprocal Rank Fusion. Your AI
+coding assistant can find code by meaning — "where do we validate auth
+tokens?" — instead of relying on grep or burning context on file-by-file
+exploration. Everything runs on your machine. No API keys, no uploads,
+no hosted services.
 
 The canonical repository is
 [tlines2016/agent-context-code](https://github.com/tlines2016/agent-context-code).
 
-## Why This Exists
+## Key Features
 
-Coding agents are great at reasoning but tend to struggle when they need to find
-something specific in a large codebase — they burn through context or fall back
-to grep. This project gives them a local semantic search layer so they can look
-things up by meaning, not just by filename or string match.
+- **Hybrid search** — BM25 keyword matching and vector similarity combined via Reciprocal Rank Fusion (RRF) for results that are both precise and semantically relevant.
+- **AST-aware chunking** — Tree-sitter parses your code into functions, classes, and methods. No arbitrary line splits, no broken context.
+- **100% local** — Embeddings generated on-device, LanceDB embedded database (think SQLite for vectors), zero API calls, zero uploads.
+- **Incremental indexing** — A Merkle DAG tracks file-level content hashes. Only modified files get re-indexed, so re-indexing a large repo after a small change takes seconds.
+- **Graph-enriched results** — Search results include structural context: class hierarchy, method containment, and cross-file inheritance.
+- **23 file types** — Python, JS/TS, Go, Rust, Java, Kotlin, C/C++, C#, Svelte, Markdown, YAML, TOML, and JSON.
+- **Optional reranking** — Two-stage retrieval with a cross-encoder second pass for higher-precision results when you need them.
+- **Lightweight default model** — Ships with Qwen3-Embedding-0.6B. Non-gated, CPU-friendly, no GPU required.
 
-- **Search by intent** — ask for `where do we validate auth tokens?` instead of guessing filenames.
-- **Everything stays local** — your source code never leaves your machine. No hosted services, no uploads.
-- **Persistent index** — the index survives across sessions, so you don't have to re-explain your repo every time.
-- **Agent-agnostic** — built on MCP, so any compatible client can use it (Claude Code is best-tested today, and many users run it with Cursor, Codex CLI, Gemini CLI, and VS Code setups like Copilot Chat/Cline/Roo/Continue).
+## Who Is This For?
 
-## What It Uses Today
+- **Developers using AI coding assistants** — Give Claude, Copilot, Codex, or Gemini actual semantic understanding of your codebase instead of relying on file-tree context or text search.
+- **Teams working in large codebases** — When grep and built-in search stop scaling, hybrid vector + keyword search over AST-parsed chunks finds what you actually need.
+- **Privacy-conscious engineers** — If your code can't leave your machine — compliance, proprietary IP, air-gapped environments — this runs entirely local with no external dependencies.
 
-| Component | Details |
-|-----------|---------|
-| **Vector database** | LanceDB (embedded, serverless — like SQLite for vectors) |
-| **Relational graph** | SQLite (structural relationships: containment + cross-file inheritance today; calls/imports are planned) |
-| **Search** | Hybrid (BM25 keyword + vector similarity), automatically enabled |
-| **Storage** | `~/.agent_code_search` (or `CODE_SEARCH_STORAGE` env var) |
-| **Per-project index** | `~/.agent_code_search/projects/{name}_{hash}` |
-| **Chunking** | Python AST, tree-sitter, and structured config parsing |
-| **Change detection** | Merkle DAG (content hashes — only changed files are re-indexed) |
-| **Default embedding model** | `Qwen/Qwen3-Embedding-0.6B` (non-gated, runs on CPU or GPU) |
-| **Default reranker** | `cross-encoder/ms-marco-MiniLM-L-6-v2` (22.7M, opt-in) |
-| **Supported clients** | Claude Code (best-tested), Cursor, Codex CLI, Gemini CLI, VS Code MCP setups (Copilot Chat extension, Cline/Roo, Continue), and other MCP clients |
+## Supported Clients
 
-## System Requirements
+Works with any tool that speaks [MCP](https://modelcontextprotocol.io/) (Model Context Protocol):
 
-The default setup is designed to run on any modern laptop or desktop — no GPU
-required. If you have a GPU, larger models are available for higher quality.
+| Client | Notes |
+|--------|-------|
+| **Claude Code** | Built-in MCP support (best-tested) |
+| **Cursor** | MCP server configuration |
+| **Codex CLI** | MCP server configuration |
+| **Gemini CLI** | MCP server configuration |
+| **VS Code** — Copilot Chat | MCP extension support |
+| **VS Code** — Cline / Roo | MCP server configuration |
+| **VS Code** — Continue | MCP server configuration |
 
-### Minimum (CPU-only, default install)
+If your tool supports MCP, it can use AGENT Context Local.
 
-| Resource | Requirement |
-|----------|-------------|
-| **CPU** | Any x86_64 or ARM64 (Apple Silicon, etc.) |
-| **RAM** | 4 GB free (embedding model uses ~1.2 GB) |
-| **Disk** | ~2 GB free (model files + index storage) |
-| **GPU** | Not required |
-| **Python** | 3.12+ |
-| **OS** | Windows 10+, macOS 12+, Linux (glibc 2.31+) |
+## Getting Started
 
-### Recommended configurations
+From zero to working code search in five steps. All commands below run in
+your **regular terminal** — not inside an AI assistant session.
 
-| Setup | Embedding Model | Reranker (optional) | RAM / VRAM | Quality |
-|-------|----------------|---------------------|------------|---------|
-| **Default** | Qwen3-Embedding-0.6B (1024-d) | — | ~1.2 GB RAM | Good — runs on any modern PC |
-| **Default + reranker** | Qwen3-Embedding-0.6B (1024-d) | MiniLM-L-6-v2 (22.7M) | ~1.5 GB RAM | Better — adds precision for ~90 MB extra |
-| **GPU starter** | Qwen3-Embedding-0.6B (1024-d) | Qwen3-Reranker-0.6B | ~4 GB VRAM | High — Qwen 0.6B pair, great entry GPU setup |
-| **GPU mid-tier** | Qwen3-Embedding-4B (2560-d) | Qwen3-Reranker-0.6B | ~10 GB VRAM | Higher — bigger embeddings, same fast reranker |
-| **GPU high-end** | Qwen3-Embedding-8B (4096-d) | Qwen3-Reranker-4B | ~28 GB VRAM | Maximum — top MTEB scores |
+> **Terminal basics:** On macOS, open **Terminal** (in Applications > Utilities).
+> On Windows, open **PowerShell** or **Windows Terminal** (search for it in the
+> Start menu). On Linux, open your preferred terminal emulator.
+>
+> Useful commands if you're new to the terminal:
+> - `pwd` (macOS/Linux) or `cd` with no arguments (Windows) — print your current directory
+> - `cd /path/to/folder` — change directory
+> - `ls` (macOS/Linux) or `dir` (Windows) — list files in the current directory
 
-The **Default** setup works out of the box on any modern PC — no GPU needed, no
-extra configuration. Hybrid search (BM25 keyword matching + vector similarity) is
-always enabled automatically.
+### Step 1: Prerequisites
 
-**Reranking is optional** and adds a second-pass quality boost. Enable it anytime
-with `python scripts/cli.py config reranker on`. You can choose any reranker model
-independently from your embedding model — see
-[Optional: Two-Stage Reranker](#optional-two-stage-reranker) for the full list.
+You need three things: **Python 3.12+**, **uv** (Python package manager), and **git**.
 
-## How It Works
+**Automatic setup (recommended)** — run the script for your OS. It checks what you
+already have and only offers to install what's missing.
 
-Traditional code search (grep, ripgrep, `Ctrl+F`) matches exact strings. That
-works when you know the variable name or error message, but falls short when
-you're looking for *concepts* — "where does the app handle retries?" won't match
-`except ConnectionError: time.sleep(backoff)`.
-
-AGENT Context Local bridges that gap with **hybrid search** — combining keyword
-matching with semantic understanding:
-
-1. **Chunk** — your source files are split into meaningful pieces (functions,
-   classes, config blocks) using language-aware parsers (tree-sitter AST), not
-   arbitrary line counts.
-2. **Graph** — structural relationships extracted from the AST chunks (class
-   hierarchies, method containment, cross-file inheritance) are stored in a
-   SQLite relational graph. This lets you navigate from a search result to its
-   parent/child symbols and inherited classes via `get_graph_context` today.
-3. **Embed** — each chunk is passed through a local embedding model that converts
-   the code into a high-dimensional vector capturing its semantic meaning.
-4. **Index** — the vectors are stored in a LanceDB table alongside the original
-   code and metadata (file path, line numbers, chunk type, etc.). A full-text
-   search (FTS) index is also built for BM25 keyword matching.
-5. **Search** — when you ask a question, two searches run in parallel:
-   - **BM25 keyword search** finds chunks containing your exact terms
-   - **Vector similarity search** finds chunks with related *meaning*
-   - Results are combined via **Reciprocal Rank Fusion (RRF)** for the best of both
-6. **Rerank** (optional) — a lightweight cross-encoder re-scores the top
-   candidates for even more precise ranking.
-
-This hybrid approach significantly improves retrieval quality over vector-only search.
-The embedding model runs locally (no API calls), and LanceDB writes directly to
-disk with no server process, so the whole pipeline has minimal overhead.
-
-The index is also **incremental**: a Merkle DAG (directed acyclic graph of file
-content hashes) tracks exactly which files changed between runs, so re-indexing
-only processes files that actually changed. Combined with automatic **compaction**
-(which cleans up old versions and deleted data), the index stays lean over time
-without any manual maintenance.
-
-### Graph Retrieval Policy
-
-To keep agent responses both accurate and fast, the project uses a two-tier graph
-policy:
-
-- Graph indexing is **always on** during indexing runs, so structural context is
-  consistently available per project.
-- `search_code` **already includes lightweight graph enrichment by default** for
-  normal search responses (relationship hints only, bounded payload; not full
-  graph expansion).
-- `get_graph_context` remains the dedicated deep-traversal tool when an agent
-  needs richer structural neighborhoods around a specific chunk (full symbols +
-  edges neighborhood up to `max_depth`).
-
-## Quick Start
-
-Five steps from zero to working code search:
-
-1. **Install prerequisites** (Python 3.12+, uv, git)
-2. **Run the installer** (one command)
-3. **Register the MCP server** (run this in your terminal, not inside your MCP client session)
-4. **Verify** (`claude mcp list`)
-5. **Use it** ("index this codebase" inside your AI coding assistant)
-
-## 1. Prerequisites
-
-You need three things: **Python 3.12+**, **uv**, and **git**.
-
-### Automatic setup (recommended)
-
-Run the prerequisite script for your OS. It checks what you already have and
-only offers to install what's missing — nothing happens without your approval.
-
-**macOS / Linux / WSL:**
+macOS / Linux / WSL:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/tlines2016/agent-context-code/main/scripts/prereqs.sh | bash
 ```
 
-**Windows PowerShell:**
+Windows PowerShell:
 
 ```powershell
 irm https://raw.githubusercontent.com/tlines2016/agent-context-code/main/scripts/prereqs.ps1 | iex
@@ -184,10 +115,8 @@ powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/tli
 
 The script will tell you when everything is ready and print the next step.
 
-### Manual setup (if you prefer)
-
 <details>
-<summary>Click to expand manual install instructions</summary>
+<summary>Manual setup (if you prefer)</summary>
 
 #### Python 3.12+
 
@@ -238,23 +167,22 @@ git --version       # any version
 
 </details>
 
-## 2. Install
+### Step 2: Install
 
 The default model (`Qwen/Qwen3-Embedding-0.6B`) is **not gated** — no
 HuggingFace account or token needed. Just run the installer.
 
-Review the scripts first if you want:
-[`scripts/install.sh`](https://github.com/tlines2016/agent-context-code/blob/main/scripts/install.sh)
-and
-[`scripts/install.ps1`](https://github.com/tlines2016/agent-context-code/blob/main/scripts/install.ps1)
+You can review the scripts first if you want:
+[`install.sh`](https://github.com/tlines2016/agent-context-code/blob/main/scripts/install.sh) /
+[`install.ps1`](https://github.com/tlines2016/agent-context-code/blob/main/scripts/install.ps1)
 
-### macOS / Linux / Git Bash
+macOS / Linux / Git Bash:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/tlines2016/agent-context-code/main/scripts/install.sh | bash
 ```
 
-### Windows PowerShell
+Windows PowerShell:
 
 ```powershell
 irm https://raw.githubusercontent.com/tlines2016/agent-context-code/main/scripts/install.ps1 | iex
@@ -266,140 +194,182 @@ If PowerShell blocks script execution:
 powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/tlines2016/agent-context-code/main/scripts/install.ps1 | iex"
 ```
 
-### Windows `cmd.exe`
+Windows `cmd.exe`:
 
 ```bat
 powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/tlines2016/agent-context-code/main/scripts/install.ps1 | iex"
 ```
 
-### WSL2
+WSL2:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/tlines2016/agent-context-code/main/scripts/install.sh | bash
 ```
 
-If Claude Desktop or Claude Code runs on the Windows side, you may still want
-to register the MCP server from a Windows terminal afterward.
+> **WSL2 note:** If Claude Desktop or Claude Code runs on the Windows side, you'll
+> want to register the MCP server from a Windows terminal in Step 3.
 
-### Choosing a different model
+### Step 3: Register the MCP Server
 
-If you have a GPU and want higher-quality embeddings, you can pick a different
-model by setting `CODE_SEARCH_MODEL` before running the installer:
+> **Important:** Run this command in your **regular terminal**, not inside Claude
+> Code, Codex, or any other AI assistant session. When you type `claude` or `codex`
+> in your terminal, it opens the assistant as an interactive session — you can't run
+> shell setup commands from inside that session. Run the registration command below
+> **first**, then open your assistant afterward.
 
-```bash
-export CODE_SEARCH_MODEL="unsloth/Qwen3-Embedding-4B"
-curl -fsSL https://raw.githubusercontent.com/tlines2016/agent-context-code/main/scripts/install.sh | bash
-```
+**For Claude Code:**
 
-```powershell
-$env:CODE_SEARCH_MODEL="unsloth/Qwen3-Embedding-4B"
-irm https://raw.githubusercontent.com/tlines2016/agent-context-code/main/scripts/install.ps1 | iex
-```
-
-Other options:
-
-- `Qwen/Qwen3-Embedding-0.6B`: default, non-gated, CPU-friendly
-- `unsloth/Qwen3-Embedding-4B`: higher quality, needs GPU with ~8 GB VRAM
-- `unsloth/Qwen3-Embedding-8B`: top MTEB multilingual quality, needs GPU with ~18 GB VRAM
-- `google/embeddinggemma-300m`: legacy default (gated — requires HF auth, see [Advanced: Using Gated Models](#advanced-using-gated-models))
-- `Salesforce/SFR-Embedding-Code-400M_R`: code-search-focused alternative
-
-The selected model is persisted to `~/.agent_code_search/install_config.json`.
-
-## 3. Register The MCP Server
-
-> **Important:** Run this command in your terminal, outside your MCP client
-> session. Once registered, the tools are available inside your assistant automatically.
-
-### macOS / Linux / Git Bash / WSL
+macOS / Linux / Git Bash / WSL:
 
 ```bash
 claude mcp add code-search --scope user -- uv run --directory ~/.local/share/agent-context-code python mcp_server/server.py
 ```
 
-### Windows PowerShell
+Windows PowerShell:
 
 ```powershell
 claude mcp add code-search --scope user -- uv run --directory "$env:LOCALAPPDATA\agent-context-code" python mcp_server/server.py
 ```
 
-### Other MCP Clients
+**For other MCP clients** (Cursor, Codex CLI, Gemini CLI, VS Code extensions, etc.):
 
-Use your client's MCP configuration format and point it at the same server command:
+Use your client's MCP configuration format and point it at this server command:
 
 ```bash
+# macOS / Linux / WSL
 uv run --directory ~/.local/share/agent-context-code python mcp_server/server.py
 ```
 
-On Windows, use:
-
 ```powershell
+# Windows PowerShell
 uv run --directory "$env:LOCALAPPDATA\agent-context-code" python mcp_server/server.py
 ```
 
-## 4. Verify The Install
+Check your client's documentation for where to add MCP server entries. The server
+command above is the same regardless of client — only the configuration format differs.
+
+### Step 4: Verify
+
+For Claude Code, check that the server is registered:
 
 ```bash
 claude mcp list
 ```
 
-You should see `code-search` listed as connected. You can also run diagnostics:
-
-### macOS / Linux / Git Bash / WSL
+You should see `code-search` in the list. You can also run diagnostics:
 
 ```bash
+# macOS / Linux / Git Bash / WSL
 uv run --directory ~/.local/share/agent-context-code python scripts/cli.py doctor
 ```
 
-### Windows PowerShell
-
 ```powershell
+# Windows PowerShell
 uv run --directory "$env:LOCALAPPDATA\agent-context-code" python scripts/cli.py doctor
 ```
 
-## 5. Use It
+`doctor` checks your Python version, model status, storage paths, and MCP registration.
 
-Open your AI coding assistant in your project and say:
+### Step 5: Use It
+
+Open your AI coding assistant (e.g., type `claude` in your terminal) and navigate
+to your project directory. Then tell the assistant:
 
 ```text
 index this codebase
 ```
 
-Then try questions like:
+The first indexing run processes every file. Subsequent runs are incremental — only
+changed files are re-indexed. Once indexed, try:
 
 ```text
 search for authentication logic
 ```
 
-## CLI vs MCP Tools
+```text
+where is the database connection configured?
+```
 
-There are two ways to interact with AGENT Context Local:
+```text
+find error handling patterns
+```
 
-- **CLI** (`python scripts/cli.py`) — terminal commands for setup and
-  diagnostics. Run these in your terminal directly.
-  Examples: `doctor`, `setup-guide`, `models list`, `mcp-check`
+The assistant uses the `search_code` MCP tool behind the scenes. You can also ask
+it to `get_index_status` to check index health, or `clear_index` to start fresh.
 
-- **MCP tools** — used inside your MCP client sessions for indexing and searching.
-  These are available automatically after MCP registration.
+## How It Works
 
-### Available MCP Tools
+Traditional code search (grep, ripgrep, `Ctrl+F`) matches exact strings. That
+works when you know the variable name or error message, but falls short when
+you're looking for *concepts* — "where does the app handle retries?" won't match
+`except ConnectionError: time.sleep(backoff)`.
+
+AGENT Context Local bridges that gap with **hybrid search** — combining keyword
+matching with semantic understanding:
+
+1. **Chunk** — source files are split into meaningful pieces (functions, classes,
+   config blocks) using language-aware parsers (tree-sitter AST), not arbitrary
+   line counts.
+2. **Graph** — structural relationships extracted from the AST chunks (class
+   hierarchies, method containment, cross-file inheritance) are stored in a
+   SQLite relational graph for structural navigation.
+3. **Embed** — each chunk is passed through a local embedding model that converts
+   the code into a high-dimensional vector capturing its semantic meaning.
+4. **Index** — vectors are stored in a LanceDB table alongside the original code
+   and metadata (file path, line numbers, chunk type). A full-text search (FTS)
+   index is also built for BM25 keyword matching.
+5. **Search** — when you ask a question, two searches run in parallel:
+   - **BM25 keyword search** finds chunks containing your exact terms
+   - **Vector similarity search** finds chunks with related *meaning*
+   - Results are combined via **Reciprocal Rank Fusion (RRF)** for the best of both
+6. **Rerank** (optional) — a cross-encoder re-scores the top candidates for even
+   more precise ranking.
+
+The embedding model runs locally (no API calls), and LanceDB writes directly to
+disk with no server process, so the whole pipeline has minimal overhead.
+
+The index is also **incremental**: a Merkle DAG (directed acyclic graph of file
+content hashes) tracks exactly which files changed between runs, so re-indexing
+only processes what actually changed. Combined with automatic **compaction**
+(which cleans up old versions and reclaims disk space), the index stays lean
+over time without manual maintenance.
+
+## Available MCP Tools
+
+These tools are available inside your AI assistant session after MCP registration.
 
 | Tool | Description |
 |------|-------------|
 | `index_directory("/path")` | Index a project (incremental by default) |
-| `search_code("query")` | Hybrid semantic + keyword search with lightweight graph relationship enrichment by default |
+| `search_code("query")` | Hybrid semantic + keyword search with lightweight graph enrichment |
 | `find_similar_code(chunk_id)` | Find code similar to a known chunk |
-| `get_graph_context(chunk_id)` | Deep graph context lookup for a chunk (full neighborhood traversal up to `max_depth`) |
-| `get_index_status` | Index statistics, model info, graph stats |
+| `get_graph_context(chunk_id)` | Deep structural context: full neighborhood traversal up to `max_depth` |
+| `get_index_status` | Index statistics, model info, and graph stats |
 | `list_projects` | List all indexed projects |
 | `switch_project("/path")` | Change the active project |
 | `clear_index` | Clear the vector index and relational graph |
-| `index_test_project` | Index the built-in sample project |
+| `index_test_project` | Index the built-in sample project (useful for testing) |
+
+**Typical workflow:** `index_directory` your project once, then use `search_code`
+for queries. Use `get_index_status` to check health. If you need to explore the
+structural neighborhood around a result (parent class, contained methods, inherited
+members), pass the `chunk_id` to `get_graph_context`.
+
+### Graph Retrieval Policy
+
+The project uses a two-tier graph model to balance speed and depth:
+
+- `search_code` **includes lightweight graph enrichment by default** — relationship
+  hints are attached to results (bounded payload, no full expansion). This is enough
+  for most searches.
+- `get_graph_context` is the dedicated deep-traversal tool for when an agent needs
+  the full structural neighborhood around a specific chunk (symbols + edges up to
+  `max_depth`).
 
 ## Recommended: Add to Your Project
 
-You can help Claude (and other agents like Cursor/Codex/Gemini/VS Code MCP clients) automatically discover and use code
-search by dropping a short snippet into your project's instruction file.
+Help your AI assistant automatically discover and use code search by adding a
+snippet to your project's instruction file.
 
 ### For CLAUDE.md (Claude Code reads this automatically)
 
@@ -429,24 +399,181 @@ Use `get_index_status` to check index health and model info.
 Same content as above — `agents.md` is read by other agent frameworks that
 support MCP.
 
-## If Model Download Failed
+## Supported Languages
 
-Don't worry — the installer separates software installation from model download.
-Your install is fine; the model just needs another try.
+The chunker supports 23 file extensions across:
 
-To retry the model download:
+- Python (`.py`)
+- JavaScript and TypeScript (`.js`, `.jsx`, `.ts`, `.tsx`)
+- Java and Kotlin (`.java`, `.kt`, `.kts`)
+- Go (`.go`) and Rust (`.rs`)
+- C, C++, and C# (`.c`, `.cpp`, `.cc`, `.cxx`, `.c++`, `.cs`)
+- Svelte (`.svelte`)
+- Markdown (`.md`)
+- YAML, TOML, and JSON (`.yaml`, `.yml`, `.toml`, `.json`)
 
-### macOS / Linux / Git Bash / WSL
+All programming languages use tree-sitter for AST-aware parsing.
+Configuration files (YAML, TOML, JSON) use a structured key-path parser
+that chunks by top-level sections.
+
+## System Requirements
+
+The default setup runs on any modern laptop or desktop — no GPU required.
+
+### Minimum (CPU-only, default install)
+
+| Resource | Requirement |
+|----------|-------------|
+| **CPU** | Any x86_64 or ARM64 (Apple Silicon, etc.) |
+| **RAM** | 4 GB free (embedding model uses ~1.2 GB) |
+| **Disk** | ~2 GB free (model files + index storage) |
+| **GPU** | Not required |
+| **Python** | 3.12+ |
+| **OS** | Windows 10+, macOS 12+, Linux (glibc 2.31+) |
+
+### Recommended configurations
+
+| Setup | Embedding Model | Reranker (optional) | RAM / VRAM | Quality |
+|-------|----------------|---------------------|------------|---------|
+| **Default** | Qwen3-Embedding-0.6B (1024-d) | — | ~1.2 GB RAM | Good — runs on any modern PC |
+| **Default + reranker** | Qwen3-Embedding-0.6B (1024-d) | MiniLM-L-6-v2 (22.7M) | ~1.5 GB RAM | Better — adds precision for ~90 MB extra |
+| **GPU starter** | Qwen3-Embedding-0.6B (1024-d) | Qwen3-Reranker-0.6B | ~4 GB VRAM | High — Qwen 0.6B pair, great entry GPU setup |
+| **GPU mid-tier** | Qwen3-Embedding-4B (2560-d) | Qwen3-Reranker-0.6B | ~10 GB VRAM | Higher — bigger embeddings, same fast reranker |
+| **GPU high-end** | Qwen3-Embedding-8B (4096-d) | Qwen3-Reranker-4B | ~28 GB VRAM | Maximum — top MTEB scores |
+
+The **Default** setup works out of the box. Hybrid search (BM25 keyword matching +
+vector similarity) is enabled by default — no extra configuration needed.
+
+**Reranking is optional** and adds a second-pass quality boost. Enable it anytime
+with `python scripts/cli.py config reranker on`. See
+[Optional: Two-Stage Reranker](#optional-two-stage-reranker) for the full list
+of reranker models.
+
+## Advanced Configuration
+
+### Choosing a Different Embedding Model
+
+If you have a GPU and want higher-quality embeddings, set `CODE_SEARCH_MODEL`
+before running the installer:
 
 ```bash
-uv run --directory ~/.local/share/agent-context-code python scripts/download_model_standalone.py --storage-dir ~/.agent_code_search --model "Qwen/Qwen3-Embedding-0.6B" -v
+export CODE_SEARCH_MODEL="unsloth/Qwen3-Embedding-4B"
+curl -fsSL https://raw.githubusercontent.com/tlines2016/agent-context-code/main/scripts/install.sh | bash
 ```
-
-### Windows PowerShell
 
 ```powershell
-uv run --directory "$env:LOCALAPPDATA\agent-context-code" python scripts/download_model_standalone.py --storage-dir "$env:USERPROFILE\.agent_code_search" --model "Qwen/Qwen3-Embedding-0.6B" -v
+$env:CODE_SEARCH_MODEL="unsloth/Qwen3-Embedding-4B"
+irm https://raw.githubusercontent.com/tlines2016/agent-context-code/main/scripts/install.ps1 | iex
 ```
+
+Available models:
+
+| Model | Notes |
+|-------|-------|
+| `Qwen/Qwen3-Embedding-0.6B` | Default, non-gated, CPU-friendly |
+| `unsloth/Qwen3-Embedding-4B` | Higher quality, needs GPU with ~8 GB VRAM |
+| `unsloth/Qwen3-Embedding-8B` | Top MTEB multilingual quality, needs GPU with ~18 GB VRAM |
+| `Salesforce/SFR-Embedding-Code-400M_R` | Code-search-focused alternative |
+| `google/embeddinggemma-300m` | Legacy (gated — requires HuggingFace auth, see below) |
+
+The selected model is persisted to `~/.agent_code_search/install_config.json`.
+You can change models later by re-running the installer with a different
+`CODE_SEARCH_MODEL` value.
+
+### Optional: Two-Stage Reranker
+
+A reranker adds a second pass after the initial search: vector/hybrid search
+returns the top 50 candidates, then a cross-encoder model reads each candidate
+against your query and re-scores them for relevance.
+
+#### Available reranker models
+
+| Model | Size | Best for | Requirements |
+|-------|------|----------|-------------|
+| `cross-encoder/ms-marco-MiniLM-L-6-v2` | 22.7M | **Default** — fast CPU reranking | ~90 MB RAM, ~200ms for 50 passages |
+| `Qwen/Qwen3-Reranker-0.6B` | 0.6B | GPU mid-tier, 32K context | ~2 GB VRAM |
+| `BAAI/bge-reranker-v2-m3` | ~600M | Multilingual codebases | ~2 GB VRAM |
+| `Qwen/Qwen3-Reranker-4B` | 4B | Maximum quality | ~10 GB VRAM |
+
+#### Install and enable
+
+```bash
+python scripts/cli.py models install minilm-reranker
+python scripts/cli.py config reranker on
+```
+
+Or during initial install, set the profile:
+
+```bash
+export CODE_SEARCH_PROFILE=reranker
+# then run the installer
+```
+
+To disable: `python scripts/cli.py config reranker off`
+
+The default reranker (`ms-marco-MiniLM-L-6-v2`) runs on CPU with negligible
+overhead. Larger rerankers (0.6B+) need a GPU for acceptable latency. The
+reranker is entirely optional — search works well without it.
+
+### AMD GPU Support (ROCm)
+
+AMD GPUs work out of the box once you install the ROCm build of PyTorch. The
+device detection picks it up automatically.
+
+```bash
+pip install torch --index-url https://download.pytorch.org/whl/rocm7.1
+```
+
+Or with uv:
+
+```bash
+uv pip install torch --index-url https://download.pytorch.org/whl/rocm7.1
+```
+
+> **Note:** ROCm 6.2+ is the minimum for AMD Strix Halo APUs (Ryzen AI Max
+> series). For other AMD GPUs, ROCm 7.x is recommended. Integrated GPUs on
+> APUs share system memory, so VRAM limits depend on your system RAM allocation.
+
+Verify with `python scripts/cli.py doctor` — it reports your GPU type
+(NVIDIA CUDA / AMD ROCm / Apple MPS / CPU).
+
+### Using Gated Models (HuggingFace Auth)
+
+The legacy model (`google/embeddinggemma-300m`) is **gated** on HuggingFace.
+If you explicitly choose it via `CODE_SEARCH_MODEL`, you need to authenticate first.
+
+<details>
+<summary>Gated model setup instructions</summary>
+
+1. Create a HuggingFace account at https://huggingface.co/join
+2. Visit https://huggingface.co/google/embeddinggemma-300m and click
+   **"Agree and access repository"** to accept Google's Gemma license.
+   Access is granted immediately — no manual review.
+3. Create an access token at https://huggingface.co/settings/tokens
+
+**Option A — huggingface-cli (bundled with this project, recommended):**
+
+```bash
+uv run huggingface-cli login
+```
+
+Paste your token when prompted. This saves it to `~/.cache/huggingface/token`.
+
+**Option B — Environment variable:**
+
+```bash
+export HF_TOKEN="hf_your_token_here"
+```
+
+```powershell
+$env:HF_TOKEN="hf_your_token_here"
+```
+
+If you switch shells after logging in, the token may not be visible in the new
+shell. Set `HF_TOKEN` in the same shell that runs the installer. The project
+also accepts `HUGGING_FACE_HUB_TOKEN`.
+
+</details>
 
 ## Storage Layout
 
@@ -468,7 +595,8 @@ uv run --directory "$env:LOCALAPPDATA\agent-context-code" python scripts/downloa
 ```
 
 Your project workspace stays clean — all database files live in this central
-directory, never inside the project being indexed.
+directory, never inside the project being indexed. Override the storage location
+with the `CODE_SEARCH_STORAGE` environment variable.
 
 On Unix and macOS the storage directory is locked down to your user (`0700`
 permissions) so other accounts on a shared machine can't read your indexed
@@ -482,157 +610,46 @@ fragments and version snapshots. The indexer automatically compacts these
 after each session — cleaning up old versions (keeping one day of history)
 and reclaiming disk space. The SQLite relational graph (`code_graph.db`) is
 also kept in sync: modified or deleted files have their symbols and edges
-removed before the updated chunks are re-inserted. If you ever want to check
-how things look, run `get_index_status` to see the current storage size,
-version count, and graph statistics.
+removed before the updated chunks are re-inserted. Run `get_index_status`
+to see the current storage size, version count, and graph statistics.
 
-## Optional: Two-Stage Reranker
+## CLI Reference
 
-If you want even more precise results, you can turn on a second-pass reranker.
-It works like this: vector search first pulls back a broad set of candidates,
-then a reranker model reads each candidate against your query and re-scores
-them for relevance.
+The CLI (`python scripts/cli.py`) handles setup, diagnostics, and configuration.
+Indexing and search happen through the MCP tools inside your AI assistant.
 
-1. **Recall** — vector/hybrid search returns the top 50 candidates
-2. **Rerank** — the reranker reads each (query, passage) pair and re-scores
-3. **Return** — the best results after reranking
-
-### Available reranker models
-
-| Model | Size | Best for | Requirements |
-|-------|------|----------|-------------|
-| `cross-encoder/ms-marco-MiniLM-L-6-v2` | 22.7M | **Default** — fast CPU reranking | ~90 MB RAM, ~200ms for 50 passages |
-| `Qwen/Qwen3-Reranker-0.6B` | 0.6B | GPU mid-tier, 32K context | ~2 GB VRAM |
-| `BAAI/bge-reranker-v2-m3` | ~600M | Multilingual codebases | ~2 GB VRAM |
-| `Qwen/Qwen3-Reranker-4B` | 4B | Maximum quality | ~10 GB VRAM |
-
-### Install the reranker model
+If you installed via the one-liner script, run CLI commands from anywhere with:
 
 ```bash
-python scripts/cli.py models install minilm-reranker
-```
-
-Or during initial install, set the profile:
-
-```bash
-export CODE_SEARCH_PROFILE=reranker
-# then run the installer
-```
-
-### Enable/disable
-
-```bash
-python scripts/cli.py config reranker on
-python scripts/cli.py config reranker off
-```
-
-### Requirements
-
-- The default reranker (`ms-marco-MiniLM-L-6-v2`) runs on CPU with negligible overhead
-- Larger rerankers (0.6B+) need a GPU for acceptable latency
-- The reranker is entirely optional — search works great without it
-
-## AMD GPU Support (ROCm)
-
-If you have an AMD GPU, it should work out of the box once you install the
-ROCm build of PyTorch. The existing device detection picks it up automatically —
-no configuration needed on our side.
-
-### Install PyTorch with ROCm support
-
-```bash
-pip install torch --index-url https://download.pytorch.org/whl/rocm7.1
-```
-
-Or with uv:
-
-```bash
-uv pip install torch --index-url https://download.pytorch.org/whl/rocm7.1
-```
-
-> **Note:** ROCm 6.2+ is the minimum for AMD Strix Halo APUs (Ryzen AI Max
-> series). For other AMD GPUs, ROCm 7.x is recommended. The integrated GPU
-> on APUs shares system memory, so VRAM limits depend on your system RAM
-> allocation.
-
-After installing, verify with `python scripts/cli.py doctor` — it will report
-your GPU type (NVIDIA CUDA / AMD ROCm / Apple MPS / CPU).
-
-## Advanced: Using Gated Models
-
-The legacy default model (`google/embeddinggemma-300m`) is **gated** on
-HuggingFace. If you explicitly choose it via `CODE_SEARCH_MODEL`, you must
-set up HuggingFace authentication first.
-
-### Gated model setup
-
-1. Create a HuggingFace account at https://huggingface.co/join
-2. Visit https://huggingface.co/google/embeddinggemma-300m and click
-   **"Agree and access repository"** to accept Google's Gemma license.
-   Access is granted immediately — no manual review.
-3. Create an access token at https://huggingface.co/settings/tokens
-
-### Authenticate
-
-**Option A — huggingface-cli (bundled with this project, recommended):**
-
-```bash
-uv run huggingface-cli login
-```
-
-Paste your token when prompted. This saves it to `~/.cache/huggingface/token`.
-
-**Option B — Environment variable:**
-
-```bash
-export HF_TOKEN="hf_your_token_here"
+# macOS / Linux / WSL
+uv run --directory ~/.local/share/agent-context-code python scripts/cli.py <command>
 ```
 
 ```powershell
-$env:HF_TOKEN="hf_your_token_here"
+# Windows PowerShell
+uv run --directory "$env:LOCALAPPDATA\agent-context-code" python scripts/cli.py <command>
 ```
 
-**Option C — Standalone hf CLI:**
+### Setup and diagnostics
 
-```bash
-# Install (macOS/Linux)
-curl -LsSf https://hf.co/cli/install.sh | bash
-
-# Or on Windows PowerShell
-powershell -c "irm https://hf.co/cli/install.ps1 | iex"
-
-# Then
-hf auth login
-hf auth whoami
-```
-
-If you switch shells after logging in, the token may not be visible there.
-Set `HF_TOKEN` in the same shell that runs the installer. The project also
-accepts `HUGGING_FACE_HUB_TOKEN`.
-
-## Diagnostics
-
-Useful repo-local commands:
-
-- `python scripts/cli.py help`
-- `python scripts/cli.py doctor`
-- `python scripts/cli.py setup-guide`
-- `python scripts/cli.py troubleshoot` — HuggingFace auth & model download help
-- `python scripts/cli.py status`
-- `python scripts/cli.py paths`
-- `python scripts/cli.py mcp-check` — verify MCP server registration
+| Command | Description |
+|---------|-------------|
+| `help` | Show all available commands |
+| `doctor` | Check Python version, model status, storage paths, MCP registration |
+| `setup-guide` | Step-by-step setup walkthrough |
+| `status` | Show current project and index status |
+| `paths` | Print storage and install paths |
+| `mcp-check` | Verify MCP server registration |
+| `troubleshoot` | Interactive HuggingFace auth and model download help |
 
 ### Model management
 
-- `python scripts/cli.py models list` — list all available embedding and reranker models
-- `python scripts/cli.py models active` — show currently configured models
-- `python scripts/cli.py models install <short-name>` — download a model by short name
-- `python scripts/cli.py config reranker <on|off>` — toggle reranker
-
-If you installed with the one-liner and want to run these from anywhere, use
-`uv run --directory ~/.local/share/agent-context-code ...` on macOS/Linux/WSL
-or `uv run --directory "$env:LOCALAPPDATA\agent-context-code" ...` on
-PowerShell.
+| Command | Description |
+|---------|-------------|
+| `models list` | List all available embedding and reranker models |
+| `models active` | Show currently configured models |
+| `models install <short-name>` | Download a model by short name |
+| `config reranker <on\|off>` | Toggle reranker |
 
 ## Troubleshooting
 
@@ -642,13 +659,44 @@ Run `python scripts/cli.py troubleshoot` for interactive guidance.
 
 | Error | Fix |
 |-------|-----|
-| `401` / Access denied | Only applies to gated models — see [Advanced: Using Gated Models](#advanced-using-gated-models) |
+| `401` / Access denied | Only applies to gated models — see [Using Gated Models](#using-gated-models-huggingface-auth) |
 | Token not found | Run `uv run huggingface-cli login` or set `HF_TOKEN` env var |
 | Token exists but download fails | Export `HF_TOKEN` in the same shell running the installer |
 | Download incomplete / timeout | Check disk space (~1-2 GB needed) and network connection |
 | Import errors after install | Run `uv sync` in the project directory |
-| `claude mcp list` missing `code-search` | Remove and re-add the MCP server entry |
+| `claude mcp list` missing `code-search` | Remove and re-add the MCP server entry (see Step 3) |
 | No search results | Re-index the project; check with `python scripts/cli.py status` |
+
+### If model download failed
+
+The installer separates software installation from model download. Your install
+is fine; the model just needs another try.
+
+macOS / Linux / Git Bash / WSL:
+
+```bash
+uv run --directory ~/.local/share/agent-context-code python scripts/download_model_standalone.py --storage-dir ~/.agent_code_search --model "Qwen/Qwen3-Embedding-0.6B" -v
+```
+
+Windows PowerShell:
+
+```powershell
+uv run --directory "$env:LOCALAPPDATA\agent-context-code" python scripts/download_model_standalone.py --storage-dir "$env:USERPROFILE\.agent_code_search" --model "Qwen/Qwen3-Embedding-0.6B" -v
+```
+
+### For AI agents debugging MCP issues
+
+If you're an AI agent and code search tools aren't working:
+
+1. Ask the user to run `claude mcp list` (or their client's equivalent) in their
+   terminal to verify the server is registered.
+2. Ask the user to run `python scripts/cli.py doctor` for a full diagnostic check
+   (Python version, model status, storage paths, MCP registration).
+3. Check if the model was downloaded: `python scripts/cli.py models active` shows
+   the configured model and whether it's available locally.
+4. If the index seems empty, run `index_directory` on the project path to rebuild it.
+5. Use `get_index_status` to check if the current project has an index and how many
+   chunks it contains.
 
 ### WSL2 notes
 
@@ -656,44 +704,7 @@ Run `python scripts/cli.py troubleshoot` for interactive guidance.
   Set `HF_TOKEN` explicitly in your WSL shell.
 - **MCP registration:** If Claude Desktop runs on the Windows side, register
   the MCP server from a Windows terminal, or use `claude.exe` from WSL
-  (note the `.exe` suffix).
-
-### WSL2 + Windows filesystem interop
-
-WSL2 instances (including those installed via the Microsoft Store) have full
-access to the Windows filesystem and can run Windows executables directly.
-This is useful when tools are installed on one side but configured from the other.
-
-- Access Windows files: `ls /mnt/c/Users/$USER/`
-- Run Windows commands: `cmd.exe /c dir`
-- Call Windows binaries: `docker.exe ps`
-
-For example, if your agent CLI (Codex, Gemini CLI, Claude Code, etc.) is installed in WSL2
-but Docker Desktop is a Windows Store app, you can still configure MCP servers
-that call Windows executables:
-
-```toml
-[mcp_servers.MCP_DOCKER]
-command = "docker.exe"
-args = ["mcp", "gateway", "run"]
-```
-
-The `.exe` suffix is required when calling Windows binaries from WSL.
-Similarly, `claude.exe` works from WSL if the Claude CLI was installed on
-the Windows side.
-
-## Supported Languages
-
-The chunker currently supports 22 extensions across:
-
-- Python
-- JavaScript and TypeScript
-- Java and Kotlin
-- Go and Rust
-- C, C++, and C#
-- Svelte
-- Markdown
-- YAML, TOML, and JSON
+  (note the `.exe` suffix when calling Windows binaries from WSL).
 
 ## Uninstall
 
@@ -701,12 +712,11 @@ To completely remove AGENT Context Local (app files, indexes, models, and MCP
 registration), run the uninstall script. Shared tools (uv, Python, git) are
 **not** removed.
 
-Review the scripts first if you want:
-[`scripts/uninstall.sh`](https://github.com/tlines2016/agent-context-code/blob/main/scripts/uninstall.sh)
-and
-[`scripts/uninstall.ps1`](https://github.com/tlines2016/agent-context-code/blob/main/scripts/uninstall.ps1)
+You can review the scripts first:
+[`uninstall.sh`](https://github.com/tlines2016/agent-context-code/blob/main/scripts/uninstall.sh) /
+[`uninstall.ps1`](https://github.com/tlines2016/agent-context-code/blob/main/scripts/uninstall.ps1)
 
-### macOS / Linux / Git Bash / WSL
+macOS / Linux / Git Bash / WSL:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/tlines2016/agent-context-code/main/scripts/uninstall.sh | bash -s -- --force
@@ -718,7 +728,7 @@ Or if you have a local clone (interactive — will prompt for confirmation):
 ./scripts/uninstall.sh
 ```
 
-### Windows PowerShell
+Windows PowerShell:
 
 ```powershell
 irm https://raw.githubusercontent.com/tlines2016/agent-context-code/main/scripts/uninstall.ps1 | iex
@@ -756,9 +766,13 @@ Or if you have a local clone:
 Canonical public repo:
 [tlines2016/agent-context-code](https://github.com/tlines2016/agent-context-code)
 
+## License
+
+MIT — see [LICENSE](LICENSE) for details.
+
 ## Acknowledgements
 
 This project was originally inspired by the foundational concepts of
-claude-context-local. It has since been significantly reworked into a standalone
-tool supporting agent-agnostic workflows, a dedicated vector database, reranking,
-and local embedding models.
+claude-context-local. It has since been reworked into a standalone tool
+supporting agent-agnostic workflows, a dedicated vector database, hybrid
+search, reranking, and local embedding models.

@@ -50,18 +50,6 @@ def main():
         default="stdio",
         help="Transport protocol to use (default: stdio)"
     )
-    parser.add_argument(
-        "--host",
-        default="localhost",
-        help="Host for HTTP transport (default: localhost)"
-    )
-    parser.add_argument(
-        "--port",
-        type=int,
-        default=8000,
-        help="Port for HTTP transport (default: 8000)"
-    )
-
     args = parser.parse_args()
 
     logger.info("Starting Code Search MCP Server v%s (transport=%s)", VERSION, args.transport)
@@ -69,7 +57,7 @@ def main():
     # Create and run server
     server = CodeSearchServer()
     mcp_server = CodeSearchMCP(server)
-    mcp_server.run(transport=args.transport, host=args.host, port=args.port)
+    mcp_server.run(transport=args.transport)
 
 
 if __name__ == "__main__":

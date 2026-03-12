@@ -33,6 +33,9 @@ All index artifacts must stay under:
 ~/.agent_code_search/                   # override with CODE_SEARCH_STORAGE
 ├── models/
 ├── install_config.json
+├── merkle/                             # Merkle snapshots/metadata (global)
+│   ├── {project_hash}_snapshot.json
+│   └── {project_hash}_metadata.json
 └── projects/
     └── {project_name}_{hash}/
         ├── project_info.json
@@ -40,7 +43,6 @@ All index artifacts must stay under:
         │   ├── lancedb/
         │   │   └── code_chunks.lance/
         │   └── stats.json
-        └── snapshots/
 ```
 
 Invariants:
@@ -51,7 +53,7 @@ Invariants:
 
 ## Model Selection Reality
 
-- **Default today:** `google/embeddinggemma-300m`
+- **Default today:** `Qwen/Qwen3-Embedding-0.6B`
 - **Supported alternatives:** catalog in `embeddings/model_catalog.py`
 - **Installer-selected model:** persisted in `install_config.json`
 - **Override:** `CODE_SEARCH_MODEL` environment variable

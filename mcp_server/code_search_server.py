@@ -462,9 +462,13 @@ class CodeSearchServer:
         # These local objects are garbage-collected when the method returns —
         # they are never assigned to self, so the caller's active project
         # state (_current_project / _index_manager / _searcher) is untouched.
-        project_dir = self.get_project_storage_dir(project_path)
+        project_dir = self._project_storage_dir(project_path, create_if_missing=False)
         index_dir = project_dir / "index"
-        index_dir.mkdir(exist_ok=True)
+        if not index_dir.exists():
+            return json.dumps({
+                "error": f"Project not indexed: {project_path}",
+                "suggestion": f"Run index_directory('{project_path}') first, then retry."
+            })
         # CodeIndexManager is instantiated inline (not via get_index_manager)
         # intentionally: get_index_manager mutates self._current_project, which
         # would defeat the purpose of a context-free cross-project search.
@@ -583,7 +587,7 @@ class CodeSearchServer:
                 "success": result.success,
                 "directory": str(directory_path),
                 "project_name": project_name,
-                "incremental": incremental and result.files_modified > 0,
+                "incremental": incremental,
                 "files_added": result.files_added,
                 "files_removed": result.files_removed,
                 "files_modified": result.files_modified,

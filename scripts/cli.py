@@ -245,7 +245,7 @@ def cmd_help() -> None:
         ("paths", "Show all paths used by the tool"),
         ("setup-guide", "Print step-by-step setup instructions for your OS"),
         ("troubleshoot", "HuggingFace auth & model download help"),
-        ("mcp-check", "Verify MCP server registration with Claude"),
+        ("mcp-check", "Verify MCP registration (Claude CLI check)"),
         ("models list", "List available embedding and reranker models"),
         ("models active", "Show currently configured models"),
         ("models install", "Download a model by short name"),
@@ -284,7 +284,7 @@ def cmd_paths() -> None:
     if storage is None:
         print(f"  {yellow('—')} Install directory:       {install_dir}")
         print(f"  {yellow('—')} Storage-dependent paths are unavailable until {cyan('CODE_SEARCH_STORAGE')} points to a writable location.")
-        print(f"\n{bold('Claude config locations (checked in order):')}")
+        print(f"\n{bold('Claude Desktop config locations (optional, checked in order):')}")
         for p in get_claude_config_paths():
             marker = green("✓") if p.is_file() else yellow("—")
             print(f"  {marker} {p}")
@@ -302,7 +302,7 @@ def cmd_paths() -> None:
         marker = green("✓") if exists else yellow("—")
         print(f"  {marker} {label + ':':<22s} {path}")
 
-    print(f"\n{bold('Claude config locations (checked in order):')}")
+    print(f"\n{bold('Claude Desktop config locations (optional, checked in order):')}")
     for p in get_claude_config_paths():
         marker = green("✓") if p.is_file() else yellow("—")
         print(f"  {marker} {p}")
@@ -417,11 +417,11 @@ def cmd_doctor() -> None:
         else:
             print(f"  {cyan('ℹ')} Reranker not configured (optional)")
 
-    # 9. Claude CLI (WARNING)
+    # 9. Claude CLI availability (optional, only needed for claude mcp commands)
     if shutil.which("claude"):
-        print(f"  {green('✓')} Claude CLI found in PATH")
+        print(f"  {green('✓')} Claude CLI found in PATH (optional)")
     else:
-        msg = "Claude CLI not found in PATH – install from https://claude.ai/code"
+        msg = "Claude CLI not found in PATH (optional unless you use Claude as your MCP client)"
         print(f"  {yellow('!')} {msg}")
         warnings.append(msg)
 
@@ -607,8 +607,9 @@ def cmd_setup_guide() -> None:
         print(f"   {cyan(f'uv run --directory \"{install_dir}\" python scripts/cli.py doctor')}")
     else:
         print(f"   {cyan(f'uv run --directory {install_dir} python scripts/cli.py doctor')}")
-    print(f"   {cyan('claude mcp list')}")
-    print(f"   Look for: code-search … {green('✓ Connected')}\n")
+    print(f"   If using Claude CLI, run: {cyan('claude mcp list')}")
+    print(f"   Look for: code-search … {green('✓ Connected')}")
+    print(f"   For other MCP clients, verify using your client's MCP server list/health view.\n")
 
     # Step 5 – Use
     print(bold("5. Index & search"))
@@ -763,15 +764,16 @@ def cmd_troubleshoot() -> None:
 
 
 def cmd_mcp_check() -> None:
-    """Check if the code-search MCP server is registered with Claude CLI."""
+    """Check MCP registration using Claude CLI (optional helper)."""
     install_dir = get_default_install_dir()
 
-    print(bold("MCP Server Registration Check\n"))
+    print(bold("MCP Server Registration Check (Claude CLI)\n"))
 
     claude_path = shutil.which("claude")
     if not claude_path:
         print(f"  {red('✗')} Claude CLI not found in PATH")
-        print(f"    Install from https://claude.ai/code\n")
+        print(f"    This check is Claude-specific. If you use another MCP client, verify there instead.")
+        print(f"    Install Claude CLI (optional): https://claude.ai/code\n")
         return
 
     print(f"  {green('✓')} Claude CLI found: {claude_path}")

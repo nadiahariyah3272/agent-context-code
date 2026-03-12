@@ -834,7 +834,7 @@ class CodeIndexManager:
                 for pattern in value:
                     safe = CodeIndexManager._escape_like_pattern(pattern)
                     pattern_clauses.append(
-                        f"relative_path LIKE '%{safe}%'"
+                        f"relative_path LIKE '%{safe}%' ESCAPE '\\'"
                     )
                 if pattern_clauses:
                     clauses.append("(" + " OR ".join(pattern_clauses) + ")")
@@ -850,7 +850,7 @@ class CodeIndexManager:
                 fc = []
                 for folder in folders:
                     safe = CodeIndexManager._escape_like_pattern(folder).replace('"', '""')
-                    fc.append(f'folder_structure LIKE \'%"{safe}"%\'')
+                    fc.append(f'folder_structure LIKE \'%"{safe}"%\' ESCAPE \'\\\'')
                 if fc:
                     clauses.append("(" + " OR ".join(fc) + ")")
             elif key == "tags":
@@ -862,7 +862,7 @@ class CodeIndexManager:
                 tc = []
                 for tag in tags:
                     safe = CodeIndexManager._escape_like_pattern(tag).replace('"', '""')
-                    tc.append(f'tags LIKE \'%"{safe}"%\'')
+                    tc.append(f'tags LIKE \'%"{safe}"%\' ESCAPE \'\\\'')
                 if tc:
                     clauses.append("(" + " OR ".join(tc) + ")")
 

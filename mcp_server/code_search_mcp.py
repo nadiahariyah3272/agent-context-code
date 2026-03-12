@@ -58,12 +58,8 @@ class CodeSearchMCP(FastMCP if FastMCP else object):
             """Get help on using code search tools."""
             return self._strings["help"]
 
-    def run(self, transport: str = "stdio", host: str = "localhost", port: int = 8000):
+    def run(self, transport: str = "stdio"):
         """Run the MCP server with specified transport."""
         if transport == "http":
             transport = "sse"
-
-        if transport in ["sse", "streamable-http"]:
-            logger.info(f"Starting HTTP server on {host}:{port}")
-        # FastMCP not support host and port
         return super().run(transport=transport)

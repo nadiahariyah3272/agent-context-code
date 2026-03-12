@@ -24,7 +24,11 @@ from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
-VERSION = "0.1.0"
+from importlib.metadata import version as _pkg_version, PackageNotFoundError
+try:
+    VERSION = _pkg_version("agent-context-local")
+except PackageNotFoundError:
+    VERSION = "0.0.0-dev"  # fallback for editable/source installs
 
 
 def is_windows() -> bool:

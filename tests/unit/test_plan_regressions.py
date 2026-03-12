@@ -586,7 +586,7 @@ class TestDefaultGraphEnrichment:
             {"edge_type": "inherits", "source_chunk_id": "c0", "target_chunk_id": "c2"},
         ]
 
-        with patch.object(server, "get_project_storage_dir") as mock_dir, \
+        with patch.object(server, "_project_storage_dir") as mock_dir, \
              patch("mcp_server.code_search_server.CodeIndexManager", return_value=mock_index_manager), \
              patch("search.searcher.IntelligentSearcher", return_value=mock_searcher), \
              patch.object(server, "embedder", return_value=MagicMock()), \
@@ -618,7 +618,7 @@ class TestDefaultGraphEnrichment:
         mock_index_manager = MagicMock()
         mock_index_manager.get_index_size.return_value = 100
 
-        with patch.object(server, "get_project_storage_dir") as mock_dir, \
+        with patch.object(server, "_project_storage_dir") as mock_dir, \
              patch("mcp_server.code_search_server.CodeIndexManager", return_value=mock_index_manager), \
              patch("search.searcher.IntelligentSearcher", return_value=mock_searcher), \
              patch.object(server, "embedder", return_value=MagicMock()), \
