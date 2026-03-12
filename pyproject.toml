@@ -66,6 +66,8 @@ dependencies = [
     # transformers: pinned explicitly for Qwen3 model support (satisfied
     # transitively by sentence-transformers, but documented here for clarity).
     "transformers>=4.51.0",
+    "filelock>=3.13",
+    "pathspec>=0.12.1",
     "tree-sitter>=0.20.0",
     "tree-sitter-c>=0.24.1",
     "tree-sitter-c-sharp>=0.23.1",
@@ -78,6 +80,7 @@ dependencies = [
     "tree-sitter-python>=0.23.6",
     "tree-sitter-rust>=0.24.0",
     "tree-sitter-svelte>=1.0.2",
+    "torch>=2.10.0",
     "tree-sitter-typescript>=0.23.2",
 ]
 
@@ -102,6 +105,11 @@ test = [
     "pytest-cov>=6.2.1",
     "pytest-mock>=3.14.1",
 ]
+# GPU PyTorch extras — install with: uv sync --extra cu128
+# Only one CUDA/ROCm extra can be active at a time (see [tool.uv] conflicts).
+# Default (no extra): CPU torch from PyPI.
+cu126 = ["torch>=2.10.0"]
+cu128 = ["torch>=2.10.0"]
 
 [project.urls]
 Homepage = "https://github.com/tlines2016/agent-context-code"
@@ -122,3 +130,27 @@ include = ["chunking*", "embeddings*", "search*", "mcp_server*", "merkle*", "rer
 [tool.setuptools.package-data]
 mcp_server = ["strings.yaml"]
 "*" = ["py.typed"]
+
+[tool.uv]
+conflicts = [
+    [
+        { extra = "cu126" },
+        { extra = "cu128" },
+    ],
+]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu126", extra = "cu126" },
+    { index = "pytorch-cu128", extra = "cu128" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true

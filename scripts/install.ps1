@@ -154,6 +154,12 @@ else {
 # Detect GPU vendor and install the matching PyTorch build so embeddings
 # run on the accelerator instead of CPU.
 #
+# How GPU persistence works:
+# pyproject.toml defines GPU extras (cu118..cu128, rocm) with [tool.uv.sources]
+# and [tool.uv.conflicts] that route torch to GPU-specific PyTorch indexes.
+# `uv sync --extra cu128` installs GPU torch.  The MCP server command
+# includes `--extra <name>` so `uv run` syncs GPU torch automatically.
+#
 # Supported:  NVIDIA (CUDA), AMD (ROCm on Windows via HIP), CPU fallback
 # Apple Silicon is macOS-only and handled by install.sh.
 $gpuVendor = "cpu"
@@ -245,39 +251,115 @@ else {
     }
 }
 
-# Install GPU-accelerated PyTorch if a compatible GPU was found.
-# Skip if the correct build is already present to avoid re-downloading on every run.
-if ($torchIndexUrl) {
-    $wantedBuild = $torchIndexUrl.Split('/')[-1]  # e.g. "cu128"
-    $existingBuild = ""
-    Push-Location $ProjectDir
-    try {
-        $torchCheck = uv run python -c "import torch; v=torch.__version__; print(v.split('+')[-1] if '+' in v else 'cpu')" 2>&1
-        if ($LASTEXITCODE -eq 0) { $existingBuild = $torchCheck.ToString().Trim() }
-    } catch {}
-    finally {
-        Pop-Location
-    }
+# Map torchIndexUrl to pyproject.toml extra name.
+$gpuExtra = ""
+if ($torchIndexUrl -match '/cu118$')   { $gpuExtra = "cu118" }
+elseif ($torchIndexUrl -match '/cu121$')   { $gpuExtra = "cu121" }
+elseif ($torchIndexUrl -match '/cu124$')   { $gpuExtra = "cu124" }
+elseif ($torchIndexUrl -match '/cu126$')   { $gpuExtra = "cu126" }
+elseif ($torchIndexUrl -match '/cu128$')   { $gpuExtra = "cu128" }
+elseif ($torchIndexUrl -match '/rocm')     { $gpuExtra = "rocm"  }
 
-    if ($existingBuild -eq $wantedBuild) {
-        Write-Host "GPU-accelerated PyTorch ($wantedBuild) already installed — skipping."
-        # gpuStatus already set correctly above
-    } else {
-        Write-Host "Installing GPU-accelerated PyTorch ($gpuStatus)..."
-        Push-Location $ProjectDir
+# Install GPU-accelerated PyTorch via pyproject.toml extras.
+if ($gpuExtra) {
+    Write-Host "Installing GPU-accelerated PyTorch ($gpuStatus, extra: $gpuExtra)..."
+    Push-Location $ProjectDir
+    $syncOk = $false
+    try {
+        uv sync --extra $gpuExtra 2>&1 | Out-Host
+        $syncOk = $LASTEXITCODE -eq 0
+    } catch {
+        $syncOk = $false
+    }
+    if ($syncOk) {
+        Write-Host "GPU-accelerated PyTorch installed successfully."
+    }
+    else {
+        Write-Warning "uv sync --extra $gpuExtra failed - trying uv pip install fallback..."
         try {
             uv pip install torch --index-url $torchIndexUrl --reinstall --quiet 2>&1
             if ($LASTEXITCODE -eq 0) {
-                Write-Host "GPU-accelerated PyTorch installed successfully."
+                Write-Host "GPU PyTorch installed via fallback (uv pip install)."
             }
             else {
                 Write-Warning "GPU PyTorch installation failed - falling back to CPU."
-                Write-Host "  You can retry later: uv pip install torch --index-url $torchIndexUrl --reinstall"
+                Write-Host "  You can retry later: uv run --directory `"$ProjectDir`" python scripts/cli.py gpu-setup"
                 $gpuStatus = "cpu-fallback"
+                $gpuExtra = ""
             }
-        } finally {
-            Pop-Location
+        } catch {
+            Write-Warning "GPU PyTorch installation failed - falling back to CPU."
+            Write-Host "  You can retry later: uv run --directory `"$ProjectDir`" python scripts/cli.py gpu-setup"
+            $gpuStatus = "cpu-fallback"
+            $gpuExtra = ""
         }
+    }
+    Pop-Location
+}
+
+# ── Auto-save GPU-appropriate model defaults ────────────────────────────
+# When a GPU was detected and no explicit model choice exists in
+# install_config.json, pre-configure the GPU-optimised embedding model
+# and reranker so the MCP server uses them on first run.
+$gpuRerankerAuto = ""
+if ($gpuVendor -ne "cpu" -and $gpuStatus -ne "cpu-fallback") {
+    $configFile = Join-Path $StorageDir "install_config.json"
+    $hasEmbedding = $false
+    if (Test-Path $configFile) {
+        try {
+            $existingConfig = Get-Content $configFile -Raw | ConvertFrom-Json
+            if ($existingConfig.embedding_model) { $hasEmbedding = $true }
+        } catch {}
+    }
+
+    if (-not $hasEmbedding) {
+        $gpuEmbedModel = "Qwen/Qwen3-Embedding-0.6B"
+        $gpuRerankerModel = "Qwen/Qwen3-Reranker-0.6B"
+        Write-Host "GPU detected - saving GPU-optimised model defaults to install_config.json"
+        Write-Host "  Embedding: $gpuEmbedModel"
+        Write-Host "  Reranker:  $gpuRerankerModel (auto-enabled)"
+        # Write config using uv run python (stdlib only) to avoid
+        # ConvertFrom-Json -AsHashtable which requires PowerShell 7+.
+        New-Item -ItemType Directory -Force -Path $StorageDir | Out-Null
+        uv run --directory $ProjectDir python -c @"
+import json, sys, os
+config_path = sys.argv[1]
+config = {}
+if os.path.exists(config_path):
+    try:
+        config = json.load(open(config_path))
+    except Exception:
+        pass
+config['embedding_model'] = {'model_name': sys.argv[2], 'auto_configured': True}
+config['reranker'] = {'model_name': sys.argv[3], 'enabled': True, 'recall_k': 50, 'auto_configured': True}
+config['gpu'] = {'vendor': sys.argv[4], 'torch_index_url': sys.argv[5], 'status': sys.argv[6]}
+with open(config_path, 'w') as f:
+    json.dump(config, f, indent=2)
+    f.write('\n')
+"@ $configFile $gpuEmbedModel $gpuRerankerModel $gpuVendor $(if ($torchIndexUrl) { $torchIndexUrl } else { "" }) $gpuStatus 2>&1 | Out-Null
+        # Update ModelName so the download step fetches the GPU model
+        $ModelName = $gpuEmbedModel
+        $gpuRerankerAuto = $gpuRerankerModel
+    }
+}
+
+# ── GPU-auto-enabled reranker download ────────────────────────────────
+# When the installer auto-enabled the reranker for GPU, download it now
+# (regardless of CODE_SEARCH_PROFILE) so it's ready on first MCP run.
+if ($gpuRerankerAuto) {
+    Write-Host "Downloading GPU reranker model: $gpuRerankerAuto"
+    Push-Location $ProjectDir
+    try {
+        uv run scripts/download_reranker_standalone.py --storage-dir $StorageDir --model $gpuRerankerAuto -v
+        if ($LASTEXITCODE -eq 0) {
+            $rerankerStatus = "ok"
+        } else {
+            $rerankerStatus = "failed"
+            Write-Warning "GPU reranker download did not complete."
+            Write-Host "The reranker is optional - search still works with embedding-only mode."
+        }
+    } finally {
+        Pop-Location
     }
 }
 
@@ -328,7 +410,7 @@ else {
 # Controlled by CODE_SEARCH_PROFILE (default: base).
 # Profiles: base = embedding only, reranker = +reranker, full = everything
 $Profile = if ($env:CODE_SEARCH_PROFILE) { $env:CODE_SEARCH_PROFILE } else { "base" }
-$rerankerStatus = "skipped"
+if (-not $rerankerStatus) { $rerankerStatus = "skipped" }
 if ($Profile -in @("reranker", "full")) {
     $RerankerName = if ($env:CODE_SEARCH_RERANKER) { $env:CODE_SEARCH_RERANKER } else { "cross-encoder/ms-marco-MiniLM-L-6-v2" }
     Write-Host "Downloading reranker model: $RerankerName"
@@ -380,20 +462,25 @@ if ($stashedChanges) {
     Write-Host ""
 }
 
+$uvExtraFlag = ""
+if ($gpuExtra) {
+    $uvExtraFlag = "--extra $gpuExtra "
+}
+
 Write-Host "MCP server command:"
-Write-Host "  uv run --directory `"$ProjectDir`" python mcp_server/server.py"
+Write-Host "  uv run ${uvExtraFlag}--directory `"$ProjectDir`" python mcp_server/server.py"
 Write-Host "  If installed via PyPI: agent-context-local-mcp"
 Write-Host ""
 Write-Host "Next steps (Claude Code):"
 if ($isUpdate) {
     Write-Host "1) Remove old server: claude mcp remove code-search"
-    Write-Host "2) Add updated server: claude mcp add code-search --scope user -- uv run --directory `"$ProjectDir`" python mcp_server/server.py"
+    Write-Host "2) Add updated server: claude mcp add code-search --scope user -- uv run ${uvExtraFlag}--directory `"$ProjectDir`" python mcp_server/server.py"
     Write-Host "3) Verify connection: claude mcp list"
     Write-Host "4) In Claude Code: index this codebase"
     Write-Host "5) To switch models later, set CODE_SEARCH_MODEL and re-run this installer"
 }
 else {
-    Write-Host "1) Add MCP server: claude mcp add code-search --scope user -- uv run --directory `"$ProjectDir`" python mcp_server/server.py"
+    Write-Host "1) Add MCP server: claude mcp add code-search --scope user -- uv run ${uvExtraFlag}--directory `"$ProjectDir`" python mcp_server/server.py"
     Write-Host "2) Verify connection: claude mcp list"
     Write-Host "3) In Claude Code: index this codebase"
     Write-Host "4) To switch models later, set CODE_SEARCH_MODEL and re-run this installer"

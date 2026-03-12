@@ -3,15 +3,42 @@ import logging
 import os
 
 try:
-    from common_utils import VERSION, is_installed_package  # works when installed as package
+    from common_utils import VERSION, is_installed_package, detect_gpu_index_url  # works when installed as package
 except ImportError:
     import sys
     from pathlib import Path
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from common_utils import VERSION, is_installed_package
+    from common_utils import VERSION, is_installed_package, detect_gpu_index_url
 
 from mcp_server.code_search_server import CodeSearchServer
 from mcp_server.code_search_mcp import CodeSearchMCP
+
+
+def _check_gpu_hint() -> None:
+    """Log a hint if GPU hardware is detected but torch is CPU-only.
+
+    This helps users who cloned the repo directly without running install
+    scripts or gpu-setup.
+    """
+    try:
+        import torch
+    except ImportError:
+        return
+
+    if torch.cuda.is_available():
+        return  # GPU torch already working
+
+    # Check if GPU hardware exists but torch can't use it
+    vendor, _ver, _name, index_url = detect_gpu_index_url()
+    if not index_url:
+        return  # No GPU or MPS (no action needed)
+
+    logger = logging.getLogger(__name__)
+    logger.info(
+        "GPU detected (%s) but PyTorch is CPU-only. "
+        "Run 'gpu-setup' for GPU acceleration.",
+        vendor,
+    )
 
 
 def _configure_logging(verbose: bool = False) -> None:
@@ -86,6 +113,13 @@ def main():
 
     _configure_logging(verbose=args.verbose)
     logger = logging.getLogger(__name__)
+
+    # Log hint if GPU hardware exists but torch is CPU-only
+    try:
+        _check_gpu_hint()
+    except Exception:
+        pass  # Non-critical — don't block server startup
+
     logger.info("Starting Code Search MCP Server v%s (transport=%s)", VERSION, args.transport)
 
     # Create and run server

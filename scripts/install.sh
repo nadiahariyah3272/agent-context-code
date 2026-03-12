@@ -158,6 +158,12 @@ fi
 # run on the accelerator instead of CPU.  Falls back gracefully to CPU
 # if detection fails or SKIP_GPU=1.
 #
+# How GPU persistence works:
+# pyproject.toml defines GPU extras (cu118..cu128, rocm) with [tool.uv.sources]
+# and [tool.uv.conflicts] that route torch to GPU-specific PyTorch indexes.
+# `uv sync --extra cu128` installs GPU torch.  The MCP server command
+# includes `--extra <name>` so `uv run` syncs GPU torch automatically.
+#
 # Supported:
 #   NVIDIA (CUDA)    — detected via nvidia-smi; parses driver CUDA version
 #   AMD (ROCm)       — detected via rocminfo / rocm-smi; includes Strix Halo APUs
@@ -248,28 +254,97 @@ else
   msg "No GPU detected. Embedding generation will use CPU (still works fine)."
 fi
 
-# Install GPU-accelerated PyTorch if a compatible GPU was found.
-# Skip if the correct build is already present to avoid re-downloading on every run.
-if [[ -n "${TORCH_INDEX_URL}" ]]; then
-  WANTED_BUILD="${TORCH_INDEX_URL##*/}"  # e.g. "cu128"
-  EXISTING_BUILD=$(cd "${PROJECT_DIR}" && uv run python -c \
-    "import torch; v=torch.__version__; print(v.split('+')[-1] if '+' in v else 'cpu')" \
-    2>/dev/null || echo "none")
+# Map TORCH_INDEX_URL to the pyproject.toml extra name.
+GPU_EXTRA=""
+case "${TORCH_INDEX_URL}" in
+  */cu118)   GPU_EXTRA="cu118" ;;
+  */cu121)   GPU_EXTRA="cu121" ;;
+  */cu124)   GPU_EXTRA="cu124" ;;
+  */cu126)   GPU_EXTRA="cu126" ;;
+  */cu128)   GPU_EXTRA="cu128" ;;
+  */rocm*)   GPU_EXTRA="rocm"  ;;
+esac
 
-  if [[ "${EXISTING_BUILD}" == "${WANTED_BUILD}" ]]; then
-    msg "GPU-accelerated PyTorch (${WANTED_BUILD}) already installed — skipping."
+# Install GPU-accelerated PyTorch via pyproject.toml extras.
+if [[ -n "${GPU_EXTRA}" ]]; then
+  msg "Installing GPU-accelerated PyTorch (${GPU_STATUS}, extra: ${GPU_EXTRA})..."
+  if (cd "${PROJECT_DIR}" && uv sync --extra "${GPU_EXTRA}"); then
+    msg "GPU-accelerated PyTorch installed successfully."
   else
-    msg "Installing GPU-accelerated PyTorch (${GPU_STATUS})..."
+    printf "${YELLOW}⚠ uv sync --extra ${GPU_EXTRA} failed — trying uv pip install fallback...${NC}\n"
     if (cd "${PROJECT_DIR}" && uv pip install torch --index-url "${TORCH_INDEX_URL}" --reinstall --quiet 2>&1); then
-      msg "GPU-accelerated PyTorch installed successfully."
+      msg "GPU PyTorch installed via fallback (uv pip install)."
     else
       printf "${YELLOW}⚠ GPU PyTorch installation failed — falling back to CPU.${NC}\n"
-      printf "  You can retry later: uv pip install torch --index-url %s --reinstall\n" "${TORCH_INDEX_URL}"
+      printf "  You can retry later: uv run --directory %s python scripts/cli.py gpu-setup\n" "${PROJECT_DIR}"
       GPU_STATUS="cpu-fallback"
+      GPU_EXTRA=""
     fi
   fi
 elif [[ "${GPU_VENDOR}" == "mps" ]]; then
   msg "Apple Silicon MPS: standard PyTorch build includes MPS support — no extra install needed."
+fi
+
+# ── Auto-save GPU-appropriate model defaults ────────────────────────────
+# When a GPU was detected and no explicit model choice exists in
+# install_config.json, pre-configure the GPU-optimised embedding model
+# and reranker so the MCP server uses them on first run.
+if [[ "${GPU_VENDOR}" != "cpu" && "${GPU_STATUS}" != "cpu-fallback" ]]; then
+  CONFIG_FILE="${STORAGE_DIR}/install_config.json"
+  if [[ -f "${CONFIG_FILE}" ]]; then
+    HAS_EMBEDDING=$(uv run --directory "${PROJECT_DIR}" python -c "
+import json, sys
+try:
+    c = json.load(open(sys.argv[1]))
+    print('yes' if c.get('embedding_model') else 'no')
+except Exception:
+    print('no')
+" "${CONFIG_FILE}" 2>/dev/null || echo "no")
+  else
+    HAS_EMBEDDING="no"
+  fi
+
+  if [[ "${HAS_EMBEDDING}" == "no" ]]; then
+    GPU_EMBED_MODEL="Qwen/Qwen3-Embedding-0.6B"
+    GPU_RERANKER_MODEL="Qwen/Qwen3-Reranker-0.6B"
+    msg "GPU detected — saving GPU-optimised model defaults to install_config.json"
+    msg "  Embedding: ${GPU_EMBED_MODEL}"
+    msg "  Reranker:  ${GPU_RERANKER_MODEL} (auto-enabled)"
+    mkdir -p "${STORAGE_DIR}"
+    (uv run --directory "${PROJECT_DIR}" python -c "
+import json, sys, os
+config_path = sys.argv[1]
+config = {}
+if os.path.exists(config_path):
+    try:
+        config = json.load(open(config_path))
+    except Exception:
+        pass
+config['embedding_model'] = {'model_name': sys.argv[2], 'auto_configured': True}
+config['reranker'] = {'model_name': sys.argv[3], 'enabled': True, 'recall_k': 50, 'auto_configured': True}
+config['gpu'] = {'vendor': sys.argv[4], 'torch_index_url': sys.argv[5], 'status': sys.argv[6]}
+with open(config_path, 'w') as f:
+    json.dump(config, f, indent=2)
+    f.write('\n')
+" "${CONFIG_FILE}" "${GPU_EMBED_MODEL}" "${GPU_RERANKER_MODEL}" "${GPU_VENDOR}" "${TORCH_INDEX_URL:-}" "${GPU_STATUS}" 2>/dev/null) || true
+    # Update MODEL_NAME so the download step fetches the GPU model
+    MODEL_NAME="${GPU_EMBED_MODEL}"
+    GPU_RERANKER_AUTO="${GPU_RERANKER_MODEL}"
+  fi
+fi
+
+# ── GPU-auto-enabled reranker download ────────────────────────────────
+# When the installer auto-enabled the reranker for GPU, download it now
+# (regardless of CODE_SEARCH_PROFILE) so it's ready on first MCP run.
+if [[ -n "${GPU_RERANKER_AUTO:-}" ]]; then
+  msg "Downloading GPU reranker model: ${GPU_RERANKER_AUTO}"
+  if (cd "${PROJECT_DIR}" && uv run scripts/download_reranker_standalone.py --storage-dir "${STORAGE_DIR}" --model "${GPU_RERANKER_AUTO}" -v); then
+    RERANKER_STATUS="ok"
+  else
+    RERANKER_STATUS="failed"
+    msg "WARNING: GPU reranker download did not complete."
+    msg "The reranker is optional — search still works with embedding-only mode."
+  fi
 fi
 
 msg "Downloading embedding model to ${STORAGE_DIR}"
@@ -302,7 +377,7 @@ fi
 # Controlled by CODE_SEARCH_PROFILE (default: base).
 # Profiles: base = embedding only, reranker = +reranker, full = everything
 PROFILE="${CODE_SEARCH_PROFILE:-base}"
-RERANKER_STATUS="skipped"
+RERANKER_STATUS="${RERANKER_STATUS:-skipped}"
 if [[ "$PROFILE" == "reranker" || "$PROFILE" == "full" ]]; then
   RERANKER_NAME="${CODE_SEARCH_RERANKER:-cross-encoder/ms-marco-MiniLM-L-6-v2}"
   msg "Downloading reranker model: ${RERANKER_NAME}"
@@ -349,23 +424,28 @@ if [[ "${STASHED_CHANGES}" == "1" ]]; then
   printf "  Inspect with: git -C %s stash list\n\n" "${PROJECT_DIR}"
 fi
 
+UV_EXTRA_FLAG=""
+if [[ -n "${GPU_EXTRA}" ]]; then
+  UV_EXTRA_FLAG="--extra ${GPU_EXTRA} "
+fi
+
 printf "${BOLD}MCP server command:${NC}\n"
-printf "  uv run --directory %s python mcp_server/server.py\n\n" "${PROJECT_DIR}"
+printf "  uv run %s--directory %s python mcp_server/server.py\n\n" "${UV_EXTRA_FLAG}" "${PROJECT_DIR}"
 printf "  If installed via PyPI: agent-context-local-mcp\n\n"
 
 if [[ "${IS_UPDATE}" -eq 1 ]]; then
   printf "${YELLOW}Recommended after update (Claude Code):${NC}\n"
   printf "  1) claude mcp remove code-search\n"
-  printf "  2) claude mcp add code-search --scope user -- uv run --directory %s python mcp_server/server.py\n" "${PROJECT_DIR}"
+  printf "  2) claude mcp add code-search --scope user -- uv run %s--directory %s python mcp_server/server.py\n" "${UV_EXTRA_FLAG}" "${PROJECT_DIR}"
   printf "  3) claude mcp list\n\n"
 else
   printf "${BOLD}Next steps (Claude Code):${NC}\n"
-  printf "  1) claude mcp add code-search --scope user -- uv run --directory %s python mcp_server/server.py\n" "${PROJECT_DIR}"
+  printf "  1) claude mcp add code-search --scope user -- uv run %s--directory %s python mcp_server/server.py\n" "${UV_EXTRA_FLAG}" "${PROJECT_DIR}"
   printf "  2) claude mcp list\n"
   printf "  3) In Claude Code: index this codebase\n\n"
 fi
 printf "  For other MCP clients (Cursor, Copilot, Gemini CLI, Codex, etc.):\n"
-printf "  uv run --directory %s python scripts/cli.py setup-mcp\n\n" "${PROJECT_DIR}"
+printf "  uv run %s--directory %s python scripts/cli.py setup-mcp\n\n" "${UV_EXTRA_FLAG}" "${PROJECT_DIR}"
 
 printf "${YELLOW}Notes:${NC}\n"
 printf "%s\n" "• Selected embedding model: ${MODEL_NAME}"

@@ -14,6 +14,7 @@ rather than computing paths ad-hoc, so that the ``CODE_SEARCH_STORAGE``
 override and the ``{name}_{hash}`` project layout stay consistent.
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -104,6 +105,34 @@ def get_storage_dir() -> Path:
     return storage_dir
 
 
+def get_project_lock_path(project_path: str) -> Path:
+    """Return the file-lock path for a given project.
+
+    The lock file lives inside the per-project storage directory at
+    ``<storage>/projects/{name}_{hash}/.indexing.lock``.
+
+    The hash derivation mirrors ``CodeSearchServer._project_storage_key()``
+    but is duplicated here to avoid a circular import (``common_utils`` is
+    the lowest-level module).
+    """
+    resolved = Path(project_path).resolve()
+    project_name = resolved.name
+    project_hash = hashlib.md5(str(resolved).encode()).hexdigest()[:8]
+    project_dir = get_storage_dir() / "projects" / f"{project_name}_{project_hash}"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    return project_dir / ".indexing.lock"
+
+
+def get_embedding_lock_path() -> Path:
+    """Return the system-wide embedding lock path.
+
+    Only one full-index operation should run at a time to avoid doubling
+    RAM/VRAM usage from concurrent model loads.  The lock file is at
+    ``<storage>/.embedding.lock``.
+    """
+    return get_storage_dir() / ".embedding.lock"
+
+
 def get_install_config_path(storage_dir: Optional[Path] = None) -> Path:
     """Get the persisted local installation config path."""
     return (storage_dir or get_storage_dir()) / "install_config.json"
@@ -171,6 +200,172 @@ def save_local_install_config(
     config_path = get_install_config_path(target_storage_dir)
     config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
     return config_path
+
+
+def detect_gpu_index_url() -> tuple[str, str | None, str | None, str | None]:
+    """Detect GPU hardware and return the matching PyTorch index URL.
+
+    Returns ``(vendor, version, gpu_name, index_url)`` where *vendor* is one
+    of ``"nvidia"``, ``"amd"``, ``"mps"``, or ``"cpu"``.  *index_url* is the
+    ``https://download.pytorch.org/whl/...`` URL for the best matching GPU
+    build, or ``None`` when no GPU-specific index is needed (MPS, CPU, or
+    unsupported hardware).
+
+    This function does NOT import ``torch`` — it shells out to ``nvidia-smi``
+    / ``rocminfo`` so it works even when only CPU torch is installed.
+    """
+    import re
+    import shutil
+    import subprocess
+
+    # Apple Silicon — MPS is included in the standard PyTorch macOS build
+    if platform.system() == "Darwin" and platform.machine() == "arm64":
+        return ("mps", None, "Apple Silicon", None)
+
+    # NVIDIA
+    if shutil.which("nvidia-smi"):
+        gpu_name = "unknown"
+        cuda_ver = None
+        try:
+            result = subprocess.run(
+                ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0:
+                gpu_name = result.stdout.strip().splitlines()[0]
+        except Exception:
+            pass
+        try:
+            result = subprocess.run(
+                ["nvidia-smi"], capture_output=True, text=True, timeout=5,
+            )
+            m = re.search(r"CUDA Version:\s*(\d+)\.(\d+)", result.stdout)
+            if m:
+                major, minor = int(m.group(1)), int(m.group(2))
+                cuda_ver = f"{major}.{minor}"
+                if major >= 13 or (major == 12 and minor >= 8):
+                    url = "https://download.pytorch.org/whl/cu128"
+                elif major == 12 and minor >= 6:
+                    url = "https://download.pytorch.org/whl/cu126"
+                elif major == 12 and minor >= 4:
+                    url = "https://download.pytorch.org/whl/cu124"
+                elif major == 12:
+                    url = "https://download.pytorch.org/whl/cu121"
+                elif major == 11 and minor >= 8:
+                    url = "https://download.pytorch.org/whl/cu118"
+                else:
+                    url = None
+                return ("nvidia", cuda_ver, gpu_name, url)
+        except Exception:
+            pass
+        return ("nvidia", cuda_ver, gpu_name, None)
+
+    # AMD ROCm
+    if shutil.which("rocminfo") or shutil.which("rocm-smi"):
+        gpu_name = "unknown"
+        rocm_ver = None
+        # Parse ROCm version
+        if shutil.which("rocminfo"):
+            try:
+                result = subprocess.run(
+                    ["rocminfo"], capture_output=True, text=True, timeout=5,
+                )
+                m = re.search(r"HSA Runtime Version:\s*(\d+\.\d+)", result.stdout)
+                if m:
+                    rocm_ver = m.group(1)
+            except Exception:
+                pass
+        if rocm_ver is None and shutil.which("rocm-smi"):
+            try:
+                result = subprocess.run(
+                    ["rocm-smi", "--showdriverversion"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                m = re.search(r"(\d+\.\d+)", result.stdout)
+                if m:
+                    rocm_ver = m.group(1)
+            except Exception:
+                pass
+        # GPU name
+        try:
+            result = subprocess.run(
+                ["rocm-smi", "--showproductname"],
+                capture_output=True, text=True, timeout=5,
+            )
+            m = re.search(r"GPU\[\d+\]\s*:\s*(.*)", result.stdout)
+            if m:
+                gpu_name = m.group(1).strip()
+        except Exception:
+            pass
+        # Map ROCm version to PyTorch index URL
+        url: str | None = None
+        if rocm_ver:
+            parts = rocm_ver.split(".")
+            rocm_major = int(parts[0])
+            rocm_minor = int(parts[1]) if len(parts) > 1 else 0
+            if rocm_major >= 7 or (rocm_major == 6 and rocm_minor >= 2):
+                url = "https://download.pytorch.org/whl/rocm6.2.4"
+            elif rocm_major == 6:
+                url = "https://download.pytorch.org/whl/rocm6.1"
+            # ROCm < 6.0 → no compatible PyTorch wheels, url stays None
+        else:
+            # ROCm tools found but version unknown — try latest stable
+            url = "https://download.pytorch.org/whl/rocm6.2.4"
+        return ("amd", rocm_ver, gpu_name, url)
+
+    return ("cpu", None, None, None)
+
+
+def detect_gpu() -> str:
+    """Detect the best available compute device.
+
+    Returns ``"cuda"`` (NVIDIA / AMD ROCm via HIP), ``"mps"`` (Apple
+    Silicon), or ``"cpu"``.  Safe to call even when PyTorch is not
+    installed — falls back to ``"cpu"`` on ImportError.
+    """
+    try:
+        import torch
+    except ImportError:
+        return "cpu"
+
+    if torch.cuda.is_available():
+        return "cuda"
+    try:
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return "mps"
+    except Exception:
+        pass
+    return "cpu"
+
+
+def has_explicit_model_choice(storage_dir: Optional[Path] = None) -> bool:
+    """Check whether the user has explicitly configured an embedding model.
+
+    Returns True when ``install_config.json`` contains an
+    ``embedding_model`` key (string or dict with ``model_name``).
+    """
+    config = load_local_install_config(storage_dir)
+    em = config.get("embedding_model")
+    if em is None:
+        return False
+    if isinstance(em, str):
+        return bool(em.strip())
+    if isinstance(em, dict):
+        return bool(em.get("model_name", "").strip())
+    return False
+
+
+def has_explicit_reranker_choice(storage_dir: Optional[Path] = None) -> bool:
+    """Check whether the user has explicitly configured a reranker.
+
+    Returns True when ``install_config.json`` contains a ``reranker``
+    key with an ``enabled`` field that is not None.
+    """
+    config = load_local_install_config(storage_dir)
+    rr = config.get("reranker")
+    if not isinstance(rr, dict):
+        return False
+    return "enabled" in rr
 
 
 def load_reranker_config(storage_dir: Optional[Path] = None) -> Dict[str, Any]:
