@@ -491,16 +491,58 @@ The heuristic layer (`searcher.py:255-339`) applies intelligent scoring:
 
 ---
 
+## Session A — Completed: Concurrency Safety
+
+**Status:** Done (revision-1.5 branch)
+**Date:** 2026-03-12
+
+### What Was Implemented
+
+Phase 1 (Project-Level File Lock) and Phase 2 (Global Embedding Semaphore) from Item 1 are fully implemented. Phase 3 (Resource-Aware Batch Sizing) was deferred as planned — the default 22.7M-param model makes `batch_size=32` fine.
+
+### Files Modified
+
+| File | Change |
+|------|--------|
+| `pyproject.toml` | Added `filelock>=3.13` dependency (pure Python, zero transitive deps) |
+| `common_utils.py` | Added `get_project_lock_path(project_path)` and `get_embedding_lock_path()` — derives the same `{name}_{hash}` key as `CodeSearchServer._project_storage_key()` |
+| `search/incremental_indexer.py` | Project-level `FileLock` wrapping `incremental_index()`. `lock_contention: bool` field on `IncrementalIndexResult`. `lock_timeout` param threaded through `auto_reindex_if_needed()`. Class constants: `_FULL_INDEX_LOCK_TIMEOUT = 0`, `_INCREMENTAL_LOCK_TIMEOUT = 5` |
+| `mcp_server/code_search_server.py` | Global embedding semaphore (`FileLock` on `.embedding.lock`) in `index_directory()` for full indexes only. `lock_timeout=0` passed in `search_code()` auto-reindex path so searches are never blocked |
+| `tests/unit/test_concurrency_locks.py` | 19 tests covering lock path derivation, timeout selection, contention behavior, lock release safety, search non-blocking, and global embedding lock |
+
+### Lock Behavior
+
+| Scenario | Lock | Timeout | Result |
+|----------|------|---------|--------|
+| Full index, same project contention | Project | 0s | Return immediately, `lock_contention: true` |
+| Incremental index, same project contention | Project | 5s | Wait briefly, then `lock_contention: true` |
+| Full index on different project | Global embedding | 0s | Return immediately with message |
+| Search while project is indexing | Project (via search path) | 0s | Search proceeds with existing index |
+
+### Key Design Decisions
+
+- **Lock ordering:** Global embedding (outer) → project (inner) — prevents deadlocks
+- **Crash safety:** All locks released in `finally` blocks
+- **TOCTOU prevention:** Snapshot state re-evaluated inside the lock after acquisition
+- **Non-invasive:** `lock_contention` only appears in JSON response when `true`; omitted otherwise
+
+### Test Results
+
+- 19/19 concurrency lock tests pass
+- 484/484 full suite tests pass (0 regressions)
+
+---
+
 ## Summary — Prioritized Action Items
 
 ### Critical / Do First
-1. **Add project-level file lock for indexing** — prevents index corruption from concurrent agents (Item 1)
+1. ~~**Add project-level file lock for indexing** — prevents index corruption from concurrent agents (Item 1)~~ **DONE (Session A)**
 2. **Fix Java record/sealed class support** — your codebase uses JDK 21+ (Item 3)
 
 ### Important / Do Next
 3. **Add Tier 1 languages** — Shell/Bash, PowerShell, HTML, CSS (Item 2)
 4. **Add code-aware query preprocessing** — CamelCase/snake_case splitting for BM25 (Item 4)
-5. **Add global embedding semaphore** — resource protection across MCP instances (Item 1)
+5. ~~**Add global embedding semaphore** — resource protection across MCP instances (Item 1)~~ **DONE (Session A)**
 
 ### Nice-to-Have / Do Later
 6. **Add Tier 2 languages** — Angular (via HTML + optional dedicated grammar), Ruby, PHP, Swift, SQL, Vue (Item 2)

@@ -1108,28 +1108,26 @@ def _print_json_config(mcp_cmd: str) -> None:
 def cmd_gpu_setup() -> None:
     """Detect GPU hardware and configure PyTorch for GPU acceleration.
 
-    Uses ``uv.toml`` overlay to redirect torch resolution through the
-    GPU-specific PyTorch index.  After writing ``uv.toml``, re-locks and
-    syncs so that ALL subsequent ``uv run`` commands use GPU torch — no
-    ``--no-sync`` flag needed.
+    Uses pyproject.toml extras (``cu128``, ``cu126``, etc.) with
+    ``[tool.uv.sources]`` to route torch through GPU-specific PyTorch
+    indexes.  The MCP server command includes ``--extra <name>`` so
+    ``uv run`` syncs GPU torch automatically.
     """
     print(bold("GPU Setup\n"))
 
-    # Check for --cpu flag → revert to CPU
+    # Check for --cpu flag → show CPU commands
     if "--cpu" in sys.argv:
-        print(f"  Reverting to CPU PyTorch...")
-        if _remove_gpu_uv_toml():
-            project_dir = Path(__file__).resolve().parent.parent
-            print(f"  Removed uv.toml GPU override.")
-            print(f"  Re-locking and syncing...")
-            lock_rc = subprocess.run(["uv", "lock", "--upgrade-package", "torch"], cwd=project_dir).returncode
-            sync_rc = subprocess.run(["uv", "sync"], cwd=project_dir).returncode
-            if lock_rc == 0 and sync_rc == 0:
-                print(f"\n  {green('✓')} Reverted to CPU PyTorch.\n")
-            else:
-                print(f"\n  {yellow('!')} uv lock/sync had issues. Try running 'uv sync' manually.\n")
+        project_dir = Path(__file__).resolve().parent.parent
+        mcp_dir = str(project_dir)
+        print(f"  {green('✓')} CPU mode selected.\n")
+        print(f"  Syncing without GPU extra...")
+        subprocess.run(["uv", "sync"], cwd=project_dir, timeout=600)
+        print(f"\n  Register the MCP server (CPU):")
+        if sys.platform == "win32":
+            print(f'    claude mcp add code-search --scope user -- uv run --directory "{mcp_dir}" python mcp_server/server.py')
         else:
-            print(f"  {cyan('ℹ')} No GPU override found — already using CPU.\n")
+            print(f"    claude mcp add code-search --scope user -- uv run --directory '{mcp_dir}' python mcp_server/server.py")
+        print()
         return
 
     # Step 1: Detect hardware
@@ -1165,51 +1163,57 @@ def cmd_gpu_setup() -> None:
         print(f"    Run gpu-setup again after updating your GPU drivers.")
         return
 
-    # Step 2: Check if uv.toml already has the correct index URL (idempotency)
-    existing_url = _read_gpu_uv_toml()
-    if existing_url == index_url:
-        print(f"  {green('✓')} GPU PyTorch already configured (uv.toml points to {index_url}).\n")
+    # Step 2: Map index URL to pyproject.toml extra name
+    extra_name = _index_url_to_extra(index_url)
+    if not extra_name:
+        # Older CUDA/ROCm — no pre-defined extra.  Fall back to uv pip install.
+        print(f"  {yellow('!')} No pre-built extra for {index_url} (torch 2.10.0 not available).")
+        print(f"  Installing via uv pip install fallback...")
+        project_dir = Path(__file__).resolve().parent.parent
+        fallback = subprocess.run(
+            ["uv", "pip", "install", "torch", "--index-url", index_url, "--reinstall"],
+            cwd=project_dir, timeout=600,
+        )
+        if fallback.returncode == 0:
+            print(f"\n  {green('✓')} GPU torch installed.")
+            print(f"  {yellow('!')} Use --no-sync in MCP command to prevent uv from reverting:")
+            mcp_dir = str(project_dir)
+            if sys.platform == "win32":
+                print(f'    claude mcp add code-search --scope user -- uv run --no-sync --directory "{mcp_dir}" python mcp_server/server.py')
+            else:
+                print(f"    claude mcp add code-search --scope user -- uv run --no-sync --directory '{mcp_dir}' python mcp_server/server.py")
+        else:
+            print(f"  {red('✗')} GPU torch installation failed.")
         _verify_torch_gpu()
         return
 
-    # Step 3: Write uv.toml with GPU index URL
+    # Step 3: Sync with GPU extra
     project_dir = Path(__file__).resolve().parent.parent
-    print(f"  Writing uv.toml GPU override...")
-    if not _write_gpu_uv_toml(index_url):
-        print(f"  {red('✗')} Failed to write uv.toml")
-        return
-
-    # Step 4: Re-lock and sync
-    print(f"  Re-locking torch from GPU index...")
-    lock_result = subprocess.run(
-        ["uv", "lock", "--upgrade-package", "torch"],
-        cwd=project_dir, timeout=300,
+    print(f"  Installing GPU PyTorch (extra: {extra_name})...")
+    sync_result = subprocess.run(
+        ["uv", "sync", "--extra", extra_name],
+        cwd=project_dir, timeout=600,
     )
-    if lock_result.returncode != 0:
-        print(f"\n  {yellow('!')} uv lock failed — falling back to uv pip install...")
+    if sync_result.returncode != 0:
+        print(f"\n  {yellow('!')} uv sync --extra {extra_name} failed — falling back to uv pip install...")
         fallback = subprocess.run(
             ["uv", "pip", "install", "torch", "--index-url", index_url, "--reinstall"],
             cwd=project_dir, timeout=600,
         )
         if fallback.returncode == 0:
             print(f"  {green('✓')} GPU torch installed via fallback (uv pip install).")
-            print(f"  {yellow('!')} Note: uv.toml is in place but lockfile may not reflect GPU torch.")
-            print(f"    If torch reverts to CPU, re-run: {_cmd_prefix()} gpu-setup")
         else:
             print(f"  {red('✗')} GPU torch installation failed.")
-            _remove_gpu_uv_toml()
         _verify_torch_gpu()
         return
 
-    print(f"  Syncing venv...")
-    subprocess.run(["uv", "sync"], cwd=project_dir, timeout=600)
-
-    # Step 5: Save GPU info to install_config.json
+    # Step 4: Save GPU info to install_config.json
     try:
         config = load_local_install_config()
         config["gpu"] = {
             "vendor": vendor,
             "torch_index_url": index_url,
+            "extra": extra_name,
             "status": f"{vendor}-{index_url.split('/')[-1]}",
         }
         config_path = Path(get_storage_dir()) / "install_config.json"
@@ -1217,55 +1221,34 @@ def cmd_gpu_setup() -> None:
     except Exception:
         pass  # Non-critical
 
-    # Step 6: Report success with clean MCP command (no --no-sync!)
+    # Step 5: Print MCP registration command with --extra
     mcp_dir = str(project_dir)
-    print(f"\n  {green('✓')} GPU-accelerated PyTorch configured successfully.")
-    print(f"  All future 'uv run' commands will use GPU torch automatically.\n")
+    print(f"\n  {green('✓')} GPU-accelerated PyTorch installed successfully.")
+    print(f"  Use --extra {extra_name} in uv run commands for GPU torch.\n")
 
-    print(f"  Register the MCP server (no --no-sync needed):")
+    print(f"  Register the MCP server:")
     print(f"    claude mcp remove code-search")
     if sys.platform == "win32":
-        print(f'    claude mcp add code-search --scope user -- uv run --directory "{mcp_dir}" python mcp_server/server.py')
+        print(f'    claude mcp add code-search --scope user -- uv run --extra {extra_name} --directory "{mcp_dir}" python mcp_server/server.py')
     else:
-        print(f"    claude mcp add code-search --scope user -- uv run --directory '{mcp_dir}' python mcp_server/server.py")
+        print(f"    claude mcp add code-search --scope user -- uv run --extra {extra_name} --directory '{mcp_dir}' python mcp_server/server.py")
     print()
 
     _verify_torch_gpu()
 
 
-def _write_gpu_uv_toml(index_url: str) -> bool:
-    """Write uv.toml with a GPU PyTorch index override. Returns True on success."""
-    project_dir = Path(__file__).resolve().parent.parent
-    uv_toml = project_dir / "uv.toml"
-    try:
-        uv_toml.write_text(
-            f"# Auto-generated by gpu-setup — overrides pytorch index for GPU wheels.\n"
-            f"# To revert to CPU: delete this file or run gpu-setup --cpu\n\n"
-            f"[[index]]\n"
-            f'name = "pytorch"\n'
-            f'url = "{index_url}"\n'
-            f"explicit = true\n",
-            encoding="utf-8",
-        )
-        return True
-    except OSError:
-        return False
+# Map PyTorch index URLs to pyproject.toml extra names.
+# Only indexes with torch>=2.10.0 wheels are included.  Older CUDA/ROCm
+# versions fall through to the uv pip install fallback in gpu-setup.
+_INDEX_URL_TO_EXTRA = {
+    "https://download.pytorch.org/whl/cu126": "cu126",
+    "https://download.pytorch.org/whl/cu128": "cu128",
+}
 
 
-def _remove_gpu_uv_toml() -> bool:
-    """Delete uv.toml to revert to CPU PyTorch. Returns True if file existed."""
-    project_dir = Path(__file__).resolve().parent.parent
-    uv_toml = project_dir / "uv.toml"
-    if uv_toml.exists():
-        uv_toml.unlink()
-        return True
-    return False
-
-
-def _read_gpu_uv_toml() -> Optional[str]:
-    """Read the current GPU index URL from uv.toml, or None if not present."""
-    project_dir = Path(__file__).resolve().parent.parent
-    uv_toml = project_dir / "uv.toml"
+def _index_url_to_extra(index_url: str) -> Optional[str]:
+    """Map a PyTorch index URL to the corresponding pyproject.toml extra name."""
+    return _INDEX_URL_TO_EXTRA.get(index_url)
     if not uv_toml.exists():
         return None
     try:
