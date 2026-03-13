@@ -131,11 +131,16 @@ class IntelligentSearcher:
         # Fetch more candidates when reranker is active
         fetch_k = self._reranker_recall_k if self._reranker else k
 
+        # Expand the BM25 query with split CamelCase/snake_case tokens
+        # while keeping the original for vector embedding (models handle
+        # compound terms well).
+        bm25_query = self._preprocess_bm25_query(optimized_query)
+
         raw_results = self.index_manager.search(
             query_embedding,
             fetch_k,
             filters,
-            query_text=optimized_query,
+            query_text=bm25_query,
         )
         self._logger.info(f"Index manager returned {len(raw_results)} raw results")
 
@@ -166,6 +171,46 @@ class IntelligentSearcher:
 
         return ranked_results[:k]
     
+    def _preprocess_bm25_query(self, query: str) -> str:
+        """Expand a query for BM25 by splitting code identifiers.
+
+        CamelCase, snake_case, and kebab-case tokens are split into their
+        constituent words and appended (deduplicated) after the original
+        query.  Tantivy treats space-separated terms as implicit OR, so
+        both the original compound token and the individual words match.
+
+        Example: ``"getUserById"`` → ``"getUserById get User By Id"``
+
+        The original query is always preserved as a prefix so that an exact
+        BM25 match on the unsplit identifier still ranks highest.
+        """
+        if not query or not query.strip():
+            return query
+
+        expanded_tokens: list[str] = []
+        seen: set[str] = set()
+
+        for token in query.split():
+            # Always keep the original token first
+            if token not in seen:
+                expanded_tokens.append(token)
+                seen.add(token)
+
+            # Split CamelCase with two-pass regex:
+            #   Pass 1: acronym-to-word boundary ("HTMLElement" → "HTML Element")
+            #   Pass 2: lowercase-to-uppercase   ("getUserById" → "get User By Id")
+            split = re.sub(r'([A-Z]+)([A-Z][a-z])', r'\1 \2', token)
+            split = re.sub(r'([a-z])([A-Z])', r'\1 \2', split)
+            # Split snake_case / kebab-case
+            split = split.replace('_', ' ').replace('-', ' ')
+
+            for part in split.split():
+                if part not in seen:
+                    expanded_tokens.append(part)
+                    seen.add(part)
+
+        return ' '.join(expanded_tokens)
+
     def _optimize_query(self, query: str) -> str:
         """Strip leading/trailing whitespace from the query string.
 

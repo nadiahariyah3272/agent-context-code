@@ -639,6 +639,45 @@ Phase 1 (Project-Level File Lock) and Phase 2 (Global Embedding Semaphore) from 
 
 ---
 
+## Session C — Completed: Search Improvements
+
+**Status:** Done (revision-1.6 branch)
+**Date:** 2026-03-12
+
+### What Was Implemented
+
+**Priority 1: Code-Aware BM25 Query Preprocessing**
+- Added `_preprocess_bm25_query()` to `search/searcher.py`
+- CamelCase splitting: `"getUserById"` → `"getUserById get User By Id"`
+- snake_case splitting: `"get_user_by_id"` → `"get_user_by_id get user by id"`
+- kebab-case splitting: `"get-user-by-id"` → `"get-user-by-id get user by id"`
+- Original query preserved as prefix for exact BM25 matching
+- Token deduplication prevents redundant terms
+- Vector embedding path unchanged (models handle compound terms natively)
+
+**Priority 2: BM25 Parameter Tuning Research**
+- Tantivy hardcodes k1=1.2 and b=0.75 — not configurable through API
+- Defaults acceptable: our AST-level chunks have bounded length; RRF fusion compensates for keyword noise
+- Sourcegraph's gains came from BM25F field-level boosting, not k1/b tuning
+- Research findings documented in `_ensure_fts_index()` docstring
+
+**MCP Tool Findings**
+- Created `docs/code-search-mcp-findings.md` documenting search quality observations
+- Identified duplicate results bug (RRF merge not deduplicating)
+- Documented score cliff behavior on generic queries
+- Confirmed CamelCase entity queries work well with vector embeddings
+
+### Files Modified
+
+| File | Change |
+|------|--------|
+| `search/searcher.py` | Added `_preprocess_bm25_query()`, modified `_semantic_search()` to use expanded BM25 query |
+| `search/indexer.py` | Extended `_ensure_fts_index()` docstring with BM25 parameter research |
+| `docs/code-search-mcp-findings.md` | New — MCP tool test findings |
+| `tests/unit/test_searcher.py` | Added `TestPreprocessBm25Query` (12 tests) and `TestBm25QueryExpansion` (2 tests) |
+
+---
+
 ## Summary — Prioritized Action Items
 
 ### Critical / Do First
@@ -647,14 +686,14 @@ Phase 1 (Project-Level File Lock) and Phase 2 (Global Embedding Semaphore) from 
 
 ### Important / Do Next
 3. ~~**Add Tier 1 languages** — Shell/Bash, HTML, CSS (Item 2)~~ **DONE (Session B)** (PowerShell deferred — no PyPI package)
-4. **Add code-aware query preprocessing** — CamelCase/snake_case splitting for BM25 (Item 4)
+4. ~~**Add code-aware query preprocessing** — CamelCase/snake_case splitting for BM25 (Item 4)~~ **DONE (Session C)**
 5. ~~**Add global embedding semaphore** — resource protection across MCP instances (Item 1)~~ **DONE (Session A)**
 
 ### Nice-to-Have / Do Later
 6. ~~**Add Tier 2 languages** — Ruby, PHP, Swift, SQL (Item 2)~~ **DONE (Session D)** (Angular/Vue deferred — no PyPI packages)
 7. ~~**Add Go generics metadata** (Item 3)~~ **DONE (Session B)**
 8. ~~**Improve TOML line accuracy** — better regex with comment skipping, dotted keys, quote stripping (Item 3)~~ **DONE (Session B)**
-9. **Make refine_factor configurable** (Item 4)
-10. **Investigate BM25 parameter tuning** — research task (Item 4)
+9. **Make refine_factor configurable** (Item 4) — deferred (default of 5 is appropriate for typical index sizes)
+10. ~~**Investigate BM25 parameter tuning** — research task (Item 4)~~ **DONE (Session C)** — Tantivy hardcodes k1=1.2, b=0.75; not configurable. Defaults acceptable given hybrid architecture.
 11. **Resource-aware batch sizing** for embeddings (Item 1)
 12. ~~**Add Tier 3 languages** — Terraform/HCL, Scala, Lua, Elixir, Haskell (Item 2)~~ **DONE (Session D)** (Dart/Protobuf deferred — no PyPI packages)

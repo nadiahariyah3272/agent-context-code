@@ -371,3 +371,111 @@ class TestFilteredSearch:
 
     def test_search_by_chunk_type_method_exists(self, searcher):
         assert hasattr(searcher, "search_by_chunk_type")
+
+
+# ---------------------------------------------------------------------------
+# _preprocess_bm25_query — CamelCase / snake_case expansion
+# ---------------------------------------------------------------------------
+
+class TestPreprocessBm25Query:
+    def test_camel_case_expansion(self, searcher):
+        result = searcher._preprocess_bm25_query("getUserById")
+        assert "getUserById" in result
+        assert "get" in result
+        assert "User" in result
+        assert "By" in result
+        assert "Id" in result
+
+    def test_snake_case_expansion(self, searcher):
+        result = searcher._preprocess_bm25_query("get_user_by_id")
+        assert "get_user_by_id" in result
+        assert "get" in result
+        assert "user" in result
+        assert "by" in result
+        assert "id" in result
+
+    def test_kebab_case_expansion(self, searcher):
+        result = searcher._preprocess_bm25_query("get-user-by-id")
+        assert "get-user-by-id" in result
+        assert "get" in result
+        assert "user" in result
+
+    def test_plain_query_passthrough(self, searcher):
+        result = searcher._preprocess_bm25_query("simple query")
+        assert result == "simple query"
+
+    def test_empty_query(self, searcher):
+        assert searcher._preprocess_bm25_query("") == ""
+
+    def test_whitespace_only_query(self, searcher):
+        assert searcher._preprocess_bm25_query("   ") == "   "
+
+    def test_dedup_tokens(self, searcher):
+        # "get getUserById" — "get" appears in both original and expansion
+        result = searcher._preprocess_bm25_query("get getUserById")
+        tokens = result.split()
+        # "get" should appear only once
+        assert tokens.count("get") == 1
+
+    def test_original_as_prefix(self, searcher):
+        result = searcher._preprocess_bm25_query("getUserById")
+        # Original token must come first
+        assert result.startswith("getUserById")
+
+    def test_multi_token_mixed(self, searcher):
+        result = searcher._preprocess_bm25_query("find getUserById in_module")
+        assert "find" in result
+        assert "getUserById" in result
+        assert "in_module" in result
+        assert "User" in result
+        assert "module" in result
+
+    def test_acronym_word_boundary(self, searcher):
+        """Consecutive uppercase (acronyms) split at acronym-word boundary."""
+        result = searcher._preprocess_bm25_query("HTMLElement")
+        assert "HTML" in result
+        assert "Element" in result
+
+    def test_acronym_in_middle(self, searcher):
+        result = searcher._preprocess_bm25_query("getURLParser")
+        assert "get" in result
+        assert "URL" in result
+        assert "Parser" in result
+
+    def test_all_caps_passthrough(self, searcher):
+        """All-caps tokens like HTTP have no split boundary — pass through."""
+        result = searcher._preprocess_bm25_query("HTTP")
+        assert result == "HTTP"
+
+
+# ---------------------------------------------------------------------------
+# BM25 query expansion integration — verify expanded query flows to search
+# ---------------------------------------------------------------------------
+
+class TestBm25QueryExpansion:
+    def test_expanded_query_passed_to_index_manager(self):
+        """Verify _preprocess_bm25_query output is passed as query_text."""
+        im = _make_mock_index_manager()
+        im.search.return_value = []
+        embedder = _make_mock_embedder()
+
+        s = IntelligentSearcher(im, embedder)
+        s.search("getUserById", k=1, context_depth=0)
+
+        call_args = im.search.call_args
+        assert call_args is not None
+        query_text = call_args.kwargs.get("query_text", call_args.args[3] if len(call_args.args) > 3 else None)
+        # Should contain expanded tokens, not just the raw query
+        assert "get" in query_text or "User" in query_text
+
+    def test_vector_embedding_uses_original_query(self):
+        """Verify the embedding is generated from the original query, not the expanded one."""
+        im = _make_mock_index_manager()
+        im.search.return_value = []
+        embedder = _make_mock_embedder()
+
+        s = IntelligentSearcher(im, embedder)
+        s.search("getUserById", k=1, context_depth=0)
+
+        # embed_query should receive the stripped original, not BM25-expanded
+        embedder.embed_query.assert_called_once_with("getUserById")

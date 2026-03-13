@@ -903,7 +903,19 @@ class CodeSearchServer:
                         if stats_file.exists():
                             with open(stats_file) as f:
                                 stats = json.load(f)
-                            project_info["index_stats"] = stats
+                            # Exclude bulky per-file dicts to keep
+                            # the response compact.  file_chunk_counts
+                            # alone can be 100 KB+ on large projects.
+                            summary_keys = {
+                                "file_chunk_counts",
+                                "top_tags",
+                                "chunk_types",
+                            }
+                            project_info["index_stats"] = {
+                                k: v
+                                for k, v in stats.items()
+                                if k not in summary_keys
+                            }
 
                         projects.append(project_info)
 

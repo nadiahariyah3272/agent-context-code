@@ -176,6 +176,8 @@ uv run python scripts/cli.py config reranker model qwen-reranker-4b
 
 ## Common Workflows
 
+Note: For users testing the package locally with gpu enabled, it's best to decorate uv run commands with  `--extra cu128`
+
 ### Fresh install + verify
 ```powershell
 # Run the installer (uses default model: mxbai-embed-xsmall-v1)

@@ -263,6 +263,32 @@ class CodeIndexManager:
 
         Safe to call repeatedly — LanceDB silently skips creation when the
         index already exists.
+
+        BM25 parameter notes (k1=1.2, b=0.75 — Tantivy defaults)
+        -----------------------------------------------------------
+        Tantivy hardcodes k1=1.2 and b=0.75 in ``bm25.rs``; they are
+        not configurable through Tantivy's API or LanceDB's
+        ``create_fts_index()``.
+
+        * **k1 (term frequency saturation):**  For AST-level code chunks
+          (typically 50-500 lines), term frequency saturates naturally in
+          short documents, so the exact k1 matters less.  Common code
+          keywords (``def``, ``class``, ``return``) are high-frequency /
+          low-signal, but RRF fusion with vector search already
+          down-weights pure keyword noise.
+        * **b (document length normalization):**  Code chunk length varies
+          by complexity, not topical breadth.  Lower b (0.3-0.5) could
+          reduce unfair length penalty on complex functions, but our
+          AST-segmented chunks have bounded length variation (max 6000
+          chars with head/tail truncation).
+        * **Sourcegraph's approach:**  Their gains came from BM25F
+          field-level boosting (5x for symbol names), not from tuning
+          k1/b.  Our post-retrieval heuristics (1.4x name boost, path
+          relevance boost) achieve a similar effect.
+
+        Verdict: defaults are acceptable.  Our hybrid search architecture
+        (RRF + heuristics + optional reranker) compensates for any BM25
+        parameter suboptimality.
         """
         if self._table is None:
             return
