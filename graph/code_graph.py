@@ -33,10 +33,12 @@ Edge types
     File A imports symbol from file B.  **Not yet implemented** — reserved
     for future extraction.
 ``calls``
-    Function/method A calls function/method B.  **Not yet implemented** —
-    requires call-site detection logic beyond current tree-sitter chunking.
+    Function/method A calls function/method B.  Extracted from tree-sitter
+    AST call nodes during chunking and resolved by ``resolve_call_edges``
+    after all files are indexed.  **Implemented.**
 """
 
+import json
 import logging
 import sqlite3
 from typing import Any, Dict, List, Optional
@@ -417,6 +419,12 @@ class CodeGraph:
             if not name:
                 continue
 
+            chunk_calls = getattr(chunk, "calls", None) or []
+            metadata = {}
+            if chunk_calls:
+                metadata["calls"] = chunk_calls
+            metadata_json = json.dumps(metadata) if metadata else None
+
             self.upsert_symbol(
                 chunk_id=cid,
                 name=name,
@@ -425,6 +433,7 @@ class CodeGraph:
                 start_line=getattr(chunk, "start_line", 0),
                 end_line=getattr(chunk, "end_line", 0),
                 parent_name=getattr(chunk, "parent_name", None),
+                metadata_json=metadata_json,
             )
             name_to_id[name] = cid
 
@@ -486,6 +495,60 @@ class CodeGraph:
 
         after_count = conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
         return after_count - before_count
+
+    def resolve_call_edges(self) -> int:
+        """Create CALLS edges by resolving stored call names to known symbols.
+
+        For each symbol with recorded call names in metadata_json['calls'],
+        match each called name to known symbols and insert an EDGE_CALLS
+        edge from caller to callee.
+
+        Returns the count of new edges inserted.
+        """
+        conn = self._get_conn()
+        before_count = conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
+
+        # Build name → list[chunk_id] lookup from all symbols
+        rows = conn.execute("SELECT chunk_id, name FROM symbols").fetchall()
+        name_to_ids: dict = {}
+        for row in rows:
+            cid, name = row["chunk_id"], row["name"]
+            if name:
+                name_to_ids.setdefault(name, []).append(cid)
+
+        # Find symbols with calls metadata
+        caller_rows = conn.execute(
+            "SELECT chunk_id, metadata_json FROM symbols "
+            "WHERE metadata_json IS NOT NULL AND metadata_json LIKE '%calls%'"
+        ).fetchall()
+
+        for row in caller_rows:
+            caller_id = row["chunk_id"]
+            try:
+                meta = json.loads(row["metadata_json"] or "{}")
+            except (json.JSONDecodeError, TypeError):
+                continue
+
+            called_names = meta.get("calls", [])
+            if not called_names:
+                continue
+
+            for called_name in called_names:
+                callee_ids = name_to_ids.get(called_name, [])
+                for callee_id in callee_ids:
+                    if callee_id == caller_id:
+                        continue  # skip self-calls
+                    self.add_edge(
+                        source_chunk_id=caller_id,
+                        target_chunk_id=callee_id,
+                        edge_type=EDGE_CALLS,
+                    )
+
+        self.commit()
+        after_count = conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
+        new_edges = after_count - before_count
+        logger.info("resolve_call_edges: inserted %d CALLS edges", new_edges)
+        return new_edges
 
     # ── Statistics ───────────────────────────────────────────────────────
 

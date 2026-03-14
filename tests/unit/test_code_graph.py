@@ -281,6 +281,123 @@ class TestCrossFileEdges:
 
 
 # ---------------------------------------------------------------------------
+# Call-edge resolution
+# ---------------------------------------------------------------------------
+
+class TestResolveCallEdges:
+    """Tests for resolve_call_edges() — resolves stored call names to EDGE_CALLS."""
+
+    def _make_chunk(self, name, chunk_type, file_path, start_line,
+                    parent_name=None, calls=None):
+        class MockChunk:
+            pass
+        c = MockChunk()
+        c.name = name
+        c.chunk_type = chunk_type
+        c.file_path = file_path
+        c.relative_path = file_path
+        c.start_line = start_line
+        c.end_line = start_line + 10
+        c.parent_name = parent_name
+        c.calls = calls or []
+        return c
+
+    def test_basic_call_edge_creation(self, graph):
+        """Chunks with calls metadata produce EDGE_CALLS edges after resolution."""
+        chunks = [
+            self._make_chunk("caller_fn", "function", "/a.py", 1, calls=["target_fn"]),
+            self._make_chunk("target_fn", "function", "/b.py", 1),
+        ]
+        graph.index_file_chunks("/a.py", [chunks[0]])
+        graph.index_file_chunks("/b.py", [chunks[1]])
+
+        new_edges = graph.resolve_call_edges()
+        assert new_edges == 1
+
+        callers = graph.get_callers(
+            [s["chunk_id"] for s in graph.find_symbol_by_name("target_fn")][0]
+        )
+        assert len(callers) == 1
+        assert callers[0]["name"] == "caller_fn"
+
+    def test_self_calls_are_skipped(self, graph):
+        """A function calling itself should not produce a self-referencing edge."""
+        chunks = [
+            self._make_chunk("recursive_fn", "function", "/a.py", 1,
+                             calls=["recursive_fn"]),
+        ]
+        graph.index_file_chunks("/a.py", chunks)
+        new_edges = graph.resolve_call_edges()
+        assert new_edges == 0
+
+    def test_unknown_call_names_are_ignored(self, graph):
+        """Calls to names not in the symbol table produce no edges."""
+        chunks = [
+            self._make_chunk("caller_fn", "function", "/a.py", 1,
+                             calls=["nonexistent_fn"]),
+        ]
+        graph.index_file_chunks("/a.py", chunks)
+        new_edges = graph.resolve_call_edges()
+        assert new_edges == 0
+
+    def test_duplicate_call_edges_are_deduplicated(self, graph):
+        """Running resolve_call_edges twice does not create duplicate edges."""
+        chunks = [
+            self._make_chunk("caller_fn", "function", "/a.py", 1, calls=["target_fn"]),
+            self._make_chunk("target_fn", "function", "/b.py", 1),
+        ]
+        graph.index_file_chunks("/a.py", [chunks[0]])
+        graph.index_file_chunks("/b.py", [chunks[1]])
+
+        first = graph.resolve_call_edges()
+        second = graph.resolve_call_edges()
+        assert first == 1
+        assert second == 0  # no new edges on second pass
+
+    def test_multiple_callees_from_one_caller(self, graph):
+        """A function calling multiple targets creates edges to each."""
+        chunks = [
+            self._make_chunk("main", "function", "/a.py", 1,
+                             calls=["helper_a", "helper_b"]),
+            self._make_chunk("helper_a", "function", "/b.py", 1),
+            self._make_chunk("helper_b", "function", "/b.py", 20),
+        ]
+        graph.index_file_chunks("/a.py", [chunks[0]])
+        graph.index_file_chunks("/b.py", chunks[1:])
+
+        new_edges = graph.resolve_call_edges()
+        assert new_edges == 2
+
+        # Verify via get_callees
+        main_id = graph.find_symbol_by_name("main")[0]["chunk_id"]
+        callees = graph.get_callees(main_id)
+        callee_names = {c["name"] for c in callees}
+        assert callee_names == {"helper_a", "helper_b"}
+
+    def test_call_edges_appear_in_stats(self, graph):
+        """Resolved call edges show up in get_stats() edge_types."""
+        chunks = [
+            self._make_chunk("fn_a", "function", "/a.py", 1, calls=["fn_b"]),
+            self._make_chunk("fn_b", "function", "/b.py", 1),
+        ]
+        graph.index_file_chunks("/a.py", [chunks[0]])
+        graph.index_file_chunks("/b.py", [chunks[1]])
+        graph.resolve_call_edges()
+
+        stats = graph.get_stats()
+        assert stats["edge_types"].get("calls", 0) == 1
+
+    def test_chunks_without_calls_metadata_are_harmless(self, graph):
+        """Chunks with no calls field produce no errors or edges."""
+        chunks = [
+            self._make_chunk("plain_fn", "function", "/a.py", 1),
+        ]
+        graph.index_file_chunks("/a.py", chunks)
+        new_edges = graph.resolve_call_edges()
+        assert new_edges == 0
+
+
+# ---------------------------------------------------------------------------
 # Statistics
 # ---------------------------------------------------------------------------
 

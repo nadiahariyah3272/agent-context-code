@@ -270,11 +270,16 @@ class IncrementalIndexer:
             if self.code_graph is not None:
                 try:
                     # Incremental updates can invalidate cross-file links
-                    # (e.g. inheritance), so reconcile after add/remove steps.
+                    # (e.g. inheritance, calls), so reconcile after add/remove steps.
                     cross_edges = self.code_graph.resolve_cross_file_edges()
                     logger.info(
                         "Incremental graph reconciliation added %d cross-file edges",
                         cross_edges,
+                    )
+                    call_edges = self.code_graph.resolve_call_edges()
+                    logger.info(
+                        "Incremental graph reconciliation added %d call edges",
+                        call_edges,
                     )
                     graph_stats = self.code_graph.get_stats()
                 except Exception as exc:
@@ -443,6 +448,8 @@ class IncrementalIndexer:
                 try:
                     cross_edges = self.code_graph.resolve_cross_file_edges()
                     logger.info("Resolved %d cross-file graph edges", cross_edges)
+                    call_edges = self.code_graph.resolve_call_edges()
+                    logger.info("Resolved %d call edges", call_edges)
                 except Exception as e:
                     graph_sync_ok = False
                     graph_sync_error = str(e)
