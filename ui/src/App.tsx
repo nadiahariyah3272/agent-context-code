@@ -18,18 +18,22 @@ function StatusBar() {
   })
 
   return (
-    <div className="fixed bottom-0 right-0 px-3 py-1 text-xs text-slate-600 flex items-center gap-2">
-      {data ? (
-        <>
-          <span className="h-1.5 w-1.5 rounded-full bg-green-500 inline-block" />
-          v{data.version}
-        </>
-      ) : (
-        <>
-          <span className="h-1.5 w-1.5 rounded-full bg-yellow-500 inline-block animate-pulse" />
-          connecting…
-        </>
-      )}
+    <div className="fixed bottom-3 right-3 z-40">
+      <div className="flex items-center gap-1.5 rounded-full border border-slate-700/60 bg-[#13151f]/90 backdrop-blur-sm px-3 py-1 text-xs text-slate-400 shadow-lg">
+        {data ? (
+          <>
+            <span className="h-1.5 w-1.5 rounded-full bg-green-500 inline-block" />
+            <span>v{data.version}</span>
+            <span className="text-slate-600">·</span>
+            <span className="text-green-400">connected</span>
+          </>
+        ) : (
+          <>
+            <span className="h-1.5 w-1.5 rounded-full bg-yellow-500 inline-block animate-pulse" />
+            <span>connecting…</span>
+          </>
+        )}
+      </div>
     </div>
   )
 }
@@ -49,7 +53,10 @@ export default function App() {
   return (
     <>
       <Layout>
-        {renderPage()}
+        {/* key forces remount on tab switch, triggering the fade-in animation */}
+        <div key={activeTab} className="page-animate h-full">
+          {renderPage()}
+        </div>
       </Layout>
       <StatusBar />
     </>

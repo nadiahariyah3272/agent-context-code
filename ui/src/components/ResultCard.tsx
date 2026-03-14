@@ -59,11 +59,22 @@ export default function ResultCard({ result, index }: ResultCardProps) {
           )}
         </div>
 
-        {/* Score badge */}
-        <div className="shrink-0 flex flex-col items-end gap-1">
+        {/* Score badge + visual bar */}
+        <div className="shrink-0 flex flex-col items-end gap-1.5">
           <span className={cn('badge font-mono text-xs', scoreBgColor(result.score))}>
             {formatScore(result.score)}
           </span>
+          {/* Thin progress bar giving at-a-glance score reading */}
+          <div className="h-0.5 w-10 rounded-full bg-slate-700 overflow-hidden">
+            <div
+              className={cn(
+                'h-full rounded-full',
+                result.score >= 0.80 ? 'bg-green-500' :
+                result.score >= 0.40 ? 'bg-yellow-500' : 'bg-red-500',
+              )}
+              style={{ width: `${Math.round(result.score * 100)}%` }}
+            />
+          </div>
           <span className="text-xs text-slate-600">#{index + 1}</span>
         </div>
       </div>
@@ -77,8 +88,9 @@ export default function ResultCard({ result, index }: ResultCardProps) {
             </code>
           </pre>
 
-          {/* Copy actions — visible on hover */}
-          <div className="absolute right-2 top-2 hidden gap-1 group-hover:flex">
+          {/* Copy actions — visible at reduced opacity, full opacity on hover/focus.
+               Always rendered so keyboard and touch users can reach them. */}
+          <div className="absolute right-2 top-2 flex gap-1 opacity-40 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
             <button
               onClick={() => handleCopy('snippet')}
               className="btn-ghost rounded px-2 py-1 text-xs"

@@ -10,13 +10,33 @@
  */
 import { useState, useRef } from 'react'
 import { useMutation } from '@tanstack/react-query'
-import { Search, Loader2, SlidersHorizontal, FileDown } from 'lucide-react'
+import { Search, SlidersHorizontal, FileDown, Loader2 } from 'lucide-react'
 import { api, type SearchResponse } from '@/api/client'
 import { useStore } from '@/store/useStore'
 import ResultCard from '@/components/ResultCard'
 import { copyToClipboard, formatAsMarkdown } from '@/lib/utils'
 
 const CHUNK_TYPES = ['', 'function', 'class', 'method', 'module', 'interface', 'struct']
+
+/** Skeleton placeholder shown while a search is in-flight. */
+function ResultSkeleton() {
+  return (
+    <div className="card overflow-hidden animate-pulse">
+      <div className="flex items-start justify-between gap-3 border-b border-slate-700/40 px-4 py-3">
+        <div className="flex-1 space-y-2">
+          <div className="h-3 w-2/3 rounded bg-slate-700/60" />
+          <div className="h-4 w-1/3 rounded bg-slate-700/40" />
+        </div>
+        <div className="h-5 w-12 rounded-full bg-slate-700/60" />
+      </div>
+      <div className="bg-slate-900/60 px-4 py-3 space-y-1.5">
+        <div className="h-3 w-full rounded bg-slate-700/40" />
+        <div className="h-3 w-5/6 rounded bg-slate-700/40" />
+        <div className="h-3 w-4/6 rounded bg-slate-700/40" />
+      </div>
+    </div>
+  )
+}
 
 export default function SearchPanel() {
   const { lastQuery, setLastQuery } = useStore()
@@ -163,7 +183,16 @@ export default function SearchPanel() {
           </div>
         )}
 
-        {results && (
+        {/* Skeleton cards while a search is in-flight */}
+        {mutation.isPending && (
+          <div className="space-y-4">
+            {Array.from({ length: k }).map((_, i) => (
+              <ResultSkeleton key={i} />
+            ))}
+          </div>
+        )}
+
+        {results && !mutation.isPending && (
           <div className="space-y-4">
             {/* Results header */}
             <div className="flex items-center justify-between">
@@ -200,6 +229,9 @@ export default function SearchPanel() {
             <p className="text-slate-500 text-sm max-w-xs">
               Enter a natural language query above to semantically search your
               indexed codebase.
+            </p>
+            <p className="text-slate-600 text-xs mt-2">
+              Tip: press <kbd className="rounded bg-slate-800 px-1 py-0.5 font-mono text-slate-400">Ctrl+Enter</kbd> to search
             </p>
           </div>
         )}

@@ -51,13 +51,16 @@ export default function Layout({ children }: LayoutProps) {
           >
             <Menu size={16} />
           </button>
-          {sidebarOpen && (
+          {sidebarOpen ? (
             <div className="flex items-center gap-1.5 min-w-0">
               <Cpu size={16} className="shrink-0 text-indigo-400" />
               <span className="truncate text-sm font-semibold text-slate-100">
                 Agent Context
               </span>
             </div>
+          ) : (
+            /* Show the app icon even when collapsed so the sidebar is identifiable */
+            <Cpu size={16} className="shrink-0 text-indigo-400" />
           )}
         </div>
 
@@ -80,10 +83,10 @@ export default function Layout({ children }: LayoutProps) {
           ))}
         </nav>
 
-        {/* Footer */}
+        {/* Footer — only shown when expanded */}
         {sidebarOpen && (
           <div className="border-t border-slate-700/50 p-3 text-xs text-slate-600">
-            Local &amp; private
+            100% local · no data leaves your machine
           </div>
         )}
       </aside>
