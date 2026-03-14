@@ -26,7 +26,8 @@ class CodeChunk:
     docstring: Optional[str] = None
     decorators: List[str] = None
     imports: List[str] = None  # relevant imports for this chunk
-    
+    calls: List[str] = None    # names of functions/methods called by this chunk
+
     # Context metadata
     complexity_score: int = 0  # estimated complexity
     tags: List[str] = None  # semantic tags like 'database', 'auth', 'error_handling'
@@ -36,6 +37,8 @@ class CodeChunk:
             self.decorators = []
         if self.imports is None:
             self.imports = []
+        if self.calls is None:
+            self.calls = []
         if self.tags is None:
             self.tags = []
         

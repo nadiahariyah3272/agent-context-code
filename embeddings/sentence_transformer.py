@@ -69,13 +69,18 @@ class SentenceTransformerModel(EmbeddingModel):
             _model_kwargs = {}
             if self._device in ("cuda", "mps"):
                 _model_kwargs["torch_dtype"] = torch.float16
+            else:
+                # Explicit float32 on CPU: safe on all x86 hardware regardless
+                # of the model's saved dtype.  Qwen3 checkpoints are bfloat16
+                # — without this, loading on CPUs without AVX512-BF16 fails.
+                _model_kwargs["torch_dtype"] = torch.float32
 
             model = SentenceTransformer(
                 model_source,
                 cache_folder=self.cache_dir,
                 device=self._device,
                 trust_remote_code=self._trust_remote_code,
-                model_kwargs=_model_kwargs if _model_kwargs else None,
+                model_kwargs=_model_kwargs,
             )
             self._logger.info(f"Model loaded successfully on device: {model.device}")
             self._model_loaded = True

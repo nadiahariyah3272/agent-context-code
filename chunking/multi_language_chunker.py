@@ -375,6 +375,7 @@ class MultiLanguageChunker:
                 docstring=docstring,
                 decorators=decorators,
                 imports=[],  # Tree-sitter doesn't extract imports yet
+                calls=tchunk.metadata.get('calls', []) or [],
                 complexity_score=0,  # Not calculated for tree-sitter chunks
                 tags=tags
             )

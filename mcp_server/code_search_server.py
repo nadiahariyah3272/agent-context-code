@@ -1500,3 +1500,120 @@ class CodeSearchServer:
             error_msg = f"Graph context lookup failed: {str(e)}"
             logger.error(error_msg, exc_info=True)
             return json.dumps({"error": error_msg, "suggestion": "Verify the chunk_id is valid and the project is indexed. Use search_code() to get valid chunk_ids."})
+
+    def search_callers(
+        self,
+        chunk_id: str,
+        direction: str = "callers",
+        project_path: str = None,
+    ) -> str:
+        """Find functions/methods that call (or are called by) a given code chunk.
+
+        Parameters
+        ----------
+        chunk_id : str
+            The chunk identifier (from a search result).
+        direction : str
+            ``"callers"`` (who calls this), ``"callees"`` (what this calls),
+            or ``"both"``.
+        project_path : str, optional
+            Target project path.  Uses the active project when omitted.
+        """
+        try:
+            valid_directions = {"callers", "callees", "both"}
+            if direction not in valid_directions:
+                return json.dumps({
+                    "error": f"Invalid direction '{direction}'. Must be one of: {sorted(valid_directions)}"
+                })
+
+            target_path = project_path or self._current_project
+            if target_path is None:
+                return json.dumps({
+                    "error": "No project is active. Index a directory first.",
+                    "suggestion": "Run index_directory('/path/to/project') to index and activate a project."
+                })
+
+            target_path = str(Path(target_path).resolve())
+            active_path = (
+                str(Path(self._current_project).resolve())
+                if self._current_project is not None
+                else None
+            )
+            use_transient_graph = project_path is not None and target_path != active_path
+
+            if use_transient_graph:
+                graph = self._open_transient_graph(target_path, create_if_missing=False)
+                if graph is None:
+                    return json.dumps({
+                        "error": "Project graph not indexed",
+                        "chunk_id": chunk_id,
+                        "suggestion": "Run index_directory() on this project to build the graph."
+                    })
+            else:
+                graph_path = self._graph_db_path(target_path, ensure_parent=False)
+                if not graph_path.exists():
+                    return json.dumps({
+                        "error": "Project graph not indexed",
+                        "chunk_id": chunk_id,
+                        "suggestion": "Run index_directory() on this project to build the graph."
+                    })
+                graph = self.get_code_graph(target_path)
+
+            try:
+                seed = graph.get_symbol(chunk_id)
+                if seed is None:
+                    return json.dumps({
+                        "found": False,
+                        "chunk_id": chunk_id,
+                        "miss_reason": "chunk_id not found in graph — may need re-indexing",
+                        "callers": [],
+                        "callees": [],
+                    })
+
+                def _format_symbol(sym: dict) -> dict:
+                    return {
+                        "chunk_id": sym.get("chunk_id", ""),
+                        "name": sym.get("name", ""),
+                        "chunk_type": sym.get("symbol_type", ""),
+                        "file_path": sym.get("file_path", ""),
+                        "start_line": sym.get("start_line", 0),
+                        "end_line": sym.get("end_line", 0),
+                        "parent_name": sym.get("parent_name", ""),
+                    }
+
+                result = {
+                    "chunk_id": chunk_id,
+                    "found": True,
+                    "seed": _format_symbol(dict(seed)),
+                    "callers": [],
+                    "callees": [],
+                }
+
+                if direction in ("callers", "both"):
+                    raw_callers = graph.get_callers(chunk_id)
+                    result["callers"] = [_format_symbol(s) for s in raw_callers]
+                    result["caller_count"] = len(result["callers"])
+
+                if direction in ("callees", "both"):
+                    raw_callees = graph.get_callees(chunk_id)
+                    result["callees"] = [_format_symbol(s) for s in raw_callees]
+                    result["callee_count"] = len(result["callees"])
+
+                total = len(result["callers"]) + len(result["callees"])
+                if total == 0:
+                    result["note"] = (
+                        "No call edges found. Call edges are indexed automatically "
+                        "during index_directory. If recently added code, re-index. "
+                        "Use get_index_status() to check edge_types counts."
+                    )
+
+                return json.dumps(result, default=str)
+
+            finally:
+                if use_transient_graph:
+                    graph.close()
+
+        except Exception as e:
+            error_msg = f"Caller lookup failed: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            return json.dumps({"error": error_msg, "suggestion": "Verify the chunk_id is valid and the project is indexed."})

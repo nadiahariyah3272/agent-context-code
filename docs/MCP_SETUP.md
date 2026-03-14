@@ -10,6 +10,7 @@ GitHub: <https://github.com/tlines2016/agent-context-code>
 
 ## Table of Contents
 
+- [Teaching Your Agent to Use Code Search](#teaching-your-agent-to-use-code-search)
 - [Prerequisites](#prerequisites)
 - [Install Modes — PyPI vs Source](#install-modes)
 - [Tool Setup](#tool-setup)
@@ -28,6 +29,45 @@ GitHub: <https://github.com/tlines2016/agent-context-code>
   - [Configuration via CLI Args](#configuration-via-cli-args)
   - [Configuration via Environment Variables](#configuration-via-environment-variables)
 - [Troubleshooting](#troubleshooting)
+
+---
+
+## Setting Up Your Project for Code Search
+
+After registering the MCP server, add a `## Code Search` section to your
+project's `CLAUDE.md` or `AGENTS.md`. Copy this template and adapt it:
+
+```markdown
+## Code Search
+
+This project is indexed. Use `search_code` before reading files when
+exploring unfamiliar code, investigating bugs, or scoping changes.
+
+Proven queries:
+
+  search_code("retry logic exponential backoff")     → src/utils/retry.py
+  search_code("database connection pool initialize") → src/db/pool.py
+  search_code("webhook payload validation schema")   → src/api/webhooks.py
+  search_code("user session token authenticate")     → src/auth/session.py
+
+After finding a chunk, use `get_graph_context(chunk_id)` to map sibling
+methods without reading the file. Use `find_similar_code(chunk_id)` to
+find other implementations of the same interface.
+
+Scores ≥ 0.80 are reliable. Below 0.40, rephrase using method/class names
+instead of natural language descriptions.
+```
+
+**Tailoring tips:**
+
+- **Test your queries first.** Only include ones that scored 0.80+. Real
+  examples teach the agent your vocabulary better than any rule.
+- **Add a vocabulary warning** if your codebase overloads common terms
+  (e.g., `IMPORTANT: "weight" means probability here, not mass`).
+- **Add a module layout table** if the project structure isn't obvious from
+  directory names alone.
+- **Keep it short.** The agent already receives tool descriptions from the
+  MCP server. You're just telling it *when* to search and *what works*.
 
 ---
 

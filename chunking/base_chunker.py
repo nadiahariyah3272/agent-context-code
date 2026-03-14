@@ -157,6 +157,70 @@ class LanguageChunker(ABC):
         # Tree-sitter uses 0-based indexing, convert to 1-based
         return node.start_point[0] + 1, node.end_point[0] + 1
 
+    def _get_call_names_from_node(self, node, source: bytes) -> list:
+        """Extract deduplicated names of called functions/methods from a node's subtree."""
+        collected = []
+        self._collect_call_names(node, source, collected)
+        seen = set()
+        result = []
+        for name in collected:
+            if name and name not in seen:
+                seen.add(name)
+                result.append(name)
+        return result[:200]  # cap to avoid metadata bloat on pathological nodes
+
+    # Node types used by call-name extraction (class-level to avoid
+    # re-creating frozensets on every recursive _collect_call_names call).
+    _CALL_NODE_TYPES = frozenset({
+        'call_expression', 'method_invocation', 'method_call_expression',
+        'function_call', 'call', 'application_expression',
+        'invocation_expression',
+    })
+    _MEMBER_NODE_TYPES = frozenset({
+        'member_expression', 'navigation_expression', 'field_expression',
+        'selector_expression', 'qualified_name', 'attribute',
+        'scoped_identifier',
+    })
+    _IDENTIFIER_TYPES = frozenset({
+        'identifier', 'simple_identifier', 'property_identifier',
+        'field_identifier', 'symbol', 'type_identifier',
+    })
+
+    def _collect_call_names(self, node, source: bytes, out: list) -> None:
+        """Recursive helper: walk AST and collect call target names."""
+        if node.type in self._CALL_NODE_TYPES:
+            for child in node.children:
+                if child.is_named:
+                    name = self._extract_callable_name(
+                        child, source, self._MEMBER_NODE_TYPES, self._IDENTIFIER_TYPES,
+                    )
+                    if name:
+                        out.append(name)
+                    break
+
+        for child in node.children:
+            self._collect_call_names(child, source, out)
+
+    def _extract_callable_name(
+        self, node, source: bytes, member_types: frozenset, id_types: frozenset,
+    ) -> Optional[str]:
+        """Return the simple name (last identifier) of a callable node."""
+        if node.type in id_types:
+            return self.get_node_text(node, source).strip()
+
+        if node.type in member_types:
+            for child in reversed(node.children):
+                if child.type in id_types:
+                    return self.get_node_text(child, source).strip()
+            return None
+
+        # Fallback: first identifier-like descendant
+        for child in node.children:
+            if child.type in id_types:
+                return self.get_node_text(child, source).strip()
+
+        return None
+
     def chunk_code(self, source_code: str) -> List[TreeSitterChunk]:
         """Chunk source code into semantic units.
 
@@ -180,6 +244,13 @@ class LanguageChunker(ABC):
                 # Add parent information if available
                 if parent_info:
                     metadata.update(parent_info)
+
+                # Extract call names for leaf function/method nodes only
+                # (not containers — their calls belong to their child methods).
+                if node.type not in _CONTAINER_NODE_TYPES:
+                    calls = self._get_call_names_from_node(node, source_bytes)
+                    if calls:
+                        metadata['calls'] = calls
 
                 chunk = TreeSitterChunk(
                     content=content,

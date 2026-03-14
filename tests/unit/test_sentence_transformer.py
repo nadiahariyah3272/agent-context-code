@@ -53,11 +53,13 @@ class TestSentenceTransformerDtype:
         assert call_kwargs["model_kwargs"] == {"torch_dtype": torch.float16}
 
     @patch("torch.cuda.is_available", return_value=False)
-    def test_cpu_gets_no_model_kwargs(self, _cuda):
-        """CPU device should pass model_kwargs=None."""
+    def test_cpu_gets_float32_model_kwargs(self, _cuda):
+        """CPU device should pass model_kwargs with torch.float32."""
+        import torch
+
         MockST = self._make_and_load("cpu")
         call_kwargs = MockST.call_args[1]
-        assert call_kwargs["model_kwargs"] is None
+        assert call_kwargs["model_kwargs"] == {"torch_dtype": torch.float32}
 
     @patch("torch.cuda.is_available", return_value=False)
     def test_mps_gets_float16(self, _cuda):
